@@ -38,6 +38,7 @@ local TAXI_STOP_RADIUS = 5
 local TAXI_STOP_HEIGHT = 2.5
 local TAXI_ZONE_DRAW_RADIUS = 1
 local PICKUP_SEARCH_RADIUS = 500
+local MIN_PICKUP_DISTANCE = 60
 local PICKUP_CACHE_REFRESH_DISTANCE = 125
 local MAX_TAXI_PICKUP_SAMPLES = 8
 local MAX_TAXI_DROPOFF_SAMPLES = 24
@@ -51,6 +52,10 @@ local BUS_PASSENGER_SERVICE_RATE = 2
 local MULTI_STOP_VEHICLE_SEAT_THRESHOLD = 18
 local MULTI_STOP_EMPTY_STOP_CHANCE = 0.35
 local MULTI_STOP_REQUIRED_RATING = 2.0
+local SHARED_RIDE_MIN_SEATS = 4
+local SHARED_RIDE_OFFER_CHANCE = 0.25
+local SHARED_RIDE_MIN_DROPOFF_DISTANCE = 250
+local SHARED_RIDE_MAX_DROPOFFS = 3
 
 -- Fare calculation
 local DISTANCE_MULTIPLIER = 3
@@ -114,6 +119,13 @@ local TAXI_ZONE_COLORS = {
   }
 }
 
+local TAXI_DEBUG_SPOT_COLORS = {
+  all = {0.18, 0.9, 0.35, 0.45},
+  pickup = {1, 0.82, 0.2, 0.75},
+  bus = {0.2, 0.55, 1, 0.75},
+  reserved = {1, 0.1, 0.1, 0.9}
+}
+
 -- ================================
 -- STATE
 -- ================================
@@ -157,11 +169,16 @@ local pickupCacheVehiclePos = nil
 local cachedBusRoutes = nil
 local cachedBusStopsByName = nil
 local cachedBusLevelDir = nil
+local taxiSpotDebug = {
+  enabled = false,
+  mode = "all"
+}
 
 -- Reservations
 local currentReservationToken = nil
 local reservedPickupSpot = nil
 local reservedDropoffSpot = nil
+local reservedDropoffSpots = {}
 
 -- Bus stop state
 local busStopVehicleFrozen = false
@@ -725,7 +742,8 @@ local function findValidPickupSpots()
 
   local nearby = {}
   for _, spot in ipairs(allTaxiSpots) do
-    if spot.pos and (spot.pos - playerPos):length() < PICKUP_SEARCH_RADIUS then
+    local distance = spot and spot.pos and (spot.pos - playerPos):length() or nil
+    if distance and distance < PICKUP_SEARCH_RADIUS and distance >= MIN_PICKUP_DISTANCE then
       table.insert(nearby, spot)
     end
   end
@@ -834,6 +852,7 @@ local function reserveTaxiSpots(pickupCandidates, dropoffCandidates, minDropoffD
 
   reservedPickupSpot = livePickup
   reservedDropoffSpot = liveDropoff
+  reservedDropoffSpots = {liveDropoff}
   return livePickup, liveDropoff
 end
 
@@ -841,11 +860,17 @@ function releaseReservations()
   if reservedPickupSpot and currentReservationToken then
     releaseSpot(reservedPickupSpot, currentReservationToken)
   end
-  if reservedDropoffSpot and currentReservationToken then
+  for _, spot in ipairs(reservedDropoffSpots or {}) do
+    if spot and currentReservationToken then
+      releaseSpot(spot, currentReservationToken)
+    end
+  end
+  if reservedDropoffSpot and currentReservationToken and #(reservedDropoffSpots or {}) == 0 then
     releaseSpot(reservedDropoffSpot, currentReservationToken)
   end
   reservedPickupSpot = nil
   reservedDropoffSpot = nil
+  reservedDropoffSpots = {}
   currentReservationToken = nil
 end
 
@@ -1704,11 +1729,12 @@ local function chooseMultiStopRouteSegment()
   for _, route in ipairs(routes) do
     local stops = route.tasklist or {}
     local firstStop = stops[1]
-    if firstStop and firstStop.pos and #stops >= 2 then
+    local distanceToFirstStop = firstStop and firstStop.pos and (firstStop.pos - vehiclePos):length() or nil
+    if firstStop and firstStop.pos and #stops >= 2 and distanceToFirstStop and distanceToFirstStop >= MIN_PICKUP_DISTANCE then
       table.insert(candidates, {
         route = route,
         stops = stops,
-        distanceToFirstStop = (firstStop.pos - vehiclePos):length()
+        distanceToFirstStop = distanceToFirstStop
       })
     end
   end
@@ -1777,6 +1803,70 @@ local function buildMultiStopPassengerPlan(passengerCount, stopCount)
   return plan
 end
 
+local function buildSharedRidePassengerPlan(passengerCount, dropoffCount)
+  local plan = {}
+  local remaining = math.max(1, tonumber(passengerCount) or 1)
+  local totalDropoffs = math.max(1, tonumber(dropoffCount) or 1)
+
+  for dropoffIndex = 1, totalDropoffs do
+    local stopsLeftAfter = totalDropoffs - dropoffIndex
+    if stopsLeftAfter <= 0 then
+      plan[dropoffIndex] = remaining
+    else
+      local maxDrop = math.max(1, remaining - stopsLeftAfter)
+      local dropped = math.random(1, maxDrop)
+      plan[dropoffIndex] = dropped
+      remaining = remaining - dropped
+    end
+  end
+
+  return plan
+end
+
+local function taxiSpotToStop(spot, fallbackName)
+  if not spot or not spot.pos then return nil end
+  local spotPath = safeSpotPath(spot)
+  local spotName = spot.name or spotPath or fallbackName or "Taxi Stop"
+
+  return {
+    name = tostring(spotName),
+    stopName = tostring(fallbackName or spotName),
+    pos = vec3(spot.pos.x, spot.pos.y, spot.pos.z),
+    spotPath = spotPath,
+    arrivalRadius = TAXI_STOP_RADIUS
+  }
+end
+
+local function reserveSharedRideStops(pickupSpot, firstDropoffSpot, dropoffCount)
+  local dropoffs = {firstDropoffSpot}
+  local usedPaths = {}
+
+  usedPaths[safeSpotPath(pickupSpot) or tostring(pickupSpot)] = true
+  usedPaths[safeSpotPath(firstDropoffSpot) or tostring(firstDropoffSpot)] = true
+
+  for _, candidate in ipairs(shuffleSpots(allTaxiSpots or {})) do
+    if #dropoffs >= dropoffCount then break end
+    local candidatePath = safeSpotPath(candidate) or tostring(candidate)
+    local previousDropoff = dropoffs[#dropoffs]
+    local farFromPickup = pickupSpot and candidate and pickupSpot.pos and candidate.pos and
+                          pickupSpot.pos:distance(candidate.pos) >= SHARED_RIDE_MIN_DROPOFF_DISTANCE
+    local farFromPrevious = previousDropoff and candidate and previousDropoff.pos and candidate.pos and
+                            previousDropoff.pos:distance(candidate.pos) >= SHARED_RIDE_MIN_DROPOFF_DISTANCE
+
+    if not usedPaths[candidatePath] and farFromPickup and farFromPrevious and reserveSpot(candidate, currentReservationToken) then
+      usedPaths[candidatePath] = true
+      table.insert(dropoffs, candidate)
+      table.insert(reservedDropoffSpots, candidate)
+    end
+  end
+
+  if #dropoffs < dropoffCount then
+    return nil
+  end
+
+  return dropoffs
+end
+
 local function buildDirectFare(valueMultiplier)
   validPickupSpots = findValidPickupSpots()
   if not validPickupSpots or #validPickupSpots == 0 then
@@ -1829,6 +1919,96 @@ local function buildDirectFare(valueMultiplier)
     vehicleClassDescription = state.vehicleClassDescription,
     vehiclePerformanceIndex = state.vehiclePerformanceIndex,
     vehicleClassMultiplier = state.vehicleMultiplier
+  }
+
+  payoutLimits.applyFareInfo(fare, limitInfo)
+  payoutLimits.applyOfferPreview(fare)
+  return fare
+end
+
+local function buildSharedRideFare(valueMultiplier)
+  validPickupSpots = findValidPickupSpots()
+  if not validPickupSpots or #validPickupSpots == 0 then return nil end
+
+  local availableSeats = math.max(0, math.floor(tonumber(state.availableSeats) or 0))
+  if availableSeats < SHARED_RIDE_MIN_SEATS then return nil end
+
+  local ptKey = selectRandomPassengerType(valueMultiplier, availableSeats)
+  local pt = getPassengerType(ptKey)
+  local passengerCount = math.max(2, calculatePassengerCountForType(pt))
+  passengerCount = math.min(passengerCount, availableSeats)
+  if passengerCount < 2 then return nil end
+
+  local dropoffCount = math.min(passengerCount, math.random(2, SHARED_RIDE_MAX_DROPOFFS))
+  if dropoffCount < 2 then return nil end
+
+  local pickupSpot, firstDropoffSpot
+  local shuffledPickups = shuffleSpots(validPickupSpots)
+  local pickupAttempts = math.min(#shuffledPickups, MAX_TAXI_PICKUP_SAMPLES)
+
+  for index = 1, pickupAttempts do
+    local candidatePickup = shuffledPickups[index]
+    if candidatePickup.pos then
+      pickupSpot, firstDropoffSpot = reserveTaxiSpots({candidatePickup}, allTaxiSpots, SHARED_RIDE_MIN_DROPOFF_DISTANCE, MAX_TAXI_DROPOFF_SAMPLES)
+      if pickupSpot and firstDropoffSpot then break end
+    end
+  end
+
+  if not pickupSpot or not firstDropoffSpot then return nil end
+
+  local dropoffSpots = reserveSharedRideStops(pickupSpot, firstDropoffSpot, dropoffCount)
+  if not dropoffSpots then
+    releaseReservations()
+    return nil
+  end
+
+  local stops = {taxiSpotToStop(pickupSpot, "Shared pickup")}
+  for index, spot in ipairs(dropoffSpots) do
+    table.insert(stops, taxiSpotToStop(spot, string.format("Drop-off %d", index)))
+  end
+
+  local fareMultiplier = generateFareMultiplier(ptKey)
+  local streakMultiplier = (state.fareStreak + 1) ^ 0.5
+  local stopCount = #stops
+  local offeredDistance = estimateStopSequenceDistance(stops, 1, stopCount)
+  local baseFare, limitInfo = payoutLimits.calculateBaseFare("multistop", passengerCount, offeredDistance, valueMultiplier, pt, fareMultiplier, streakMultiplier)
+  local dropoffPlan = buildSharedRidePassengerPlan(passengerCount, dropoffCount)
+  local passengerRating = calculateOfferPassengerRating(pt, fareMultiplier)
+
+  local fare = {
+    routeMode = "multistop",
+    routeType = "shared",
+    routeID = "shared",
+    routeDirection = "Shared ride",
+    routeLabel = "Shared Ride",
+    stops = stops,
+    totalStops = stopCount,
+    totalDropoffStops = dropoffCount,
+    currentStopIndex = 1,
+    completedStopCount = 0,
+    completedDropoffStops = 0,
+    dropoffPlan = dropoffPlan,
+    remainingPassengers = passengerCount,
+    pickup = copyDeep(stops[1]),
+    destination = stops[2] and copyDeep(stops[2]) or nil,
+    baseFare = baseFare,
+    initialBaseFare = baseFare,
+    estimatedDistance = offeredDistance,
+    totalRouteDistance = offeredDistance,
+    remainingRouteDistance = offeredDistance,
+    valueMultiplier = valueMultiplier,
+    fareMultiplier = fareMultiplier,
+    streakMultiplier = streakMultiplier,
+    passengers = passengerCount,
+    passengerRating = string.format("%.1f", passengerRating),
+    passengerType = ptKey,
+    passengerTypeName = pt.name,
+    passengerDescription = string.format("Shared ride with %d passengers and %d drop-offs.", passengerCount, dropoffCount),
+    vehicleClassName = state.vehicleClassName,
+    vehicleClassDescription = state.vehicleClassDescription,
+    vehiclePerformanceIndex = state.vehiclePerformanceIndex,
+    vehicleClassMultiplier = state.vehicleMultiplier,
+    nextStopName = stops[1] and stops[1].stopName or "Shared pickup"
   }
 
   payoutLimits.applyFareInfo(fare, limitInfo)
@@ -1911,7 +2091,11 @@ local function generateJob(options)
   local fare = nil
 
   if isMultiStopUnlocked() then
-    fare = buildMultiStopFare(valueMultiplier)
+    if state.availableSeats >= MULTI_STOP_VEHICLE_SEAT_THRESHOLD then
+      fare = buildMultiStopFare(valueMultiplier)
+    elseif state.availableSeats >= SHARED_RIDE_MIN_SEATS and math.random() < SHARED_RIDE_OFFER_CHANCE then
+      fare = buildSharedRideFare(valueMultiplier)
+    end
   end
 
   if not fare then
@@ -2056,7 +2240,7 @@ local function getVehicleSpeedMps()
 end
 
 local function requestBusStopVehicleState(fare, vehicle)
-  if not fare or fare.routeMode ~= "multistop" or not vehicle or not vehicle.queueLuaCommand then
+  if not fare or fare.routeMode ~= "multistop" or fare.routeType == "shared" or not vehicle or not vehicle.queueLuaCommand then
     return
   end
 
@@ -2156,7 +2340,7 @@ local function updateFareStopService(fare, stage, target, vehicle)
   
   local speedMps = getVehicleSpeedMps()
   local isMultiStop = fare.routeMode == "multistop"
-  local busCapable = isMultiStop and fare.busStopVehicleState and fare.busStopVehicleState.capable
+  local busCapable = isMultiStop and fare.routeType ~= "shared" and fare.busStopVehicleState and fare.busStopVehicleState.capable
   local passengersAtStop = getCurrentStopPassengerCount(fare, stage)
 
   -- Initialize stop service state
@@ -2269,7 +2453,7 @@ local function updateFareStopService(fare, stage, target, vehicle)
     fare.stopService.serviceComplete = false
     if isMultiStop then
       fare.stopService.instructionStep = "stop"
-      fare.stopService.instructionHtml = "Stop the bus"
+      fare.stopService.instructionHtml = fare.routeType == "shared" and "Stop for passenger service" or "Stop the bus"
     end
   end
   return false
@@ -2704,6 +2888,150 @@ end
 -- ================================
 -- TAXI ZONE VISUALIZATION
 -- ================================
+local function drawDebugSpotCylinder(spot, colorValues, radius, height)
+  if not spot or not spot.pos then return end
+
+  local bottomPos = vec3(spot.pos.x, spot.pos.y, spot.pos.z)
+  local topPos = bottomPos + vec3(0, 0, height or 2)
+  debugDrawer:drawCylinder(bottomPos:toPoint3F(), topPos:toPoint3F(), radius or 1, makeColorF(colorValues))
+end
+
+local function getDebugBusStops()
+  loadBusRoutes()
+
+  local stops = {}
+  local seen = {}
+  for key, stop in pairs(cachedBusStopsByName or {}) do
+    if stop and stop.pos then
+      local posKey = string.format("%.1f:%.1f:%.1f", stop.pos.x, stop.pos.y, stop.pos.z)
+      if not seen[posKey] then
+        seen[posKey] = true
+        local formatted = formatBusStop(stop) or stop
+        formatted.debugName = stop.stopName or stop.name or tostring(key)
+        table.insert(stops, formatted)
+      end
+    end
+  end
+
+  return stops
+end
+
+local function drawDebugTaxiSpots()
+  if not taxiSpotDebug.enabled or not debugDrawer then return end
+
+  findParkingSpots()
+  local mode = tostring(taxiSpotDebug.mode or "all"):lower()
+
+  if mode == "all" then
+    for _, spot in ipairs(allTaxiSpots or {}) do
+      drawDebugSpotCylinder(spot, TAXI_DEBUG_SPOT_COLORS.all, 0.85, 1.6)
+    end
+  end
+
+  if mode == "all" or mode == "nearby" then
+    local pickupSpots = findValidPickupSpots()
+    for _, spot in ipairs(pickupSpots or {}) do
+      drawDebugSpotCylinder(spot, TAXI_DEBUG_SPOT_COLORS.pickup, 1.05, 2.25)
+    end
+  end
+
+  if mode == "all" or mode == "bus" then
+    for _, stop in ipairs(getDebugBusStops()) do
+      drawDebugSpotCylinder(stop, TAXI_DEBUG_SPOT_COLORS.bus, 1.35, 3.25)
+    end
+  end
+
+  drawDebugSpotCylinder(reservedPickupSpot, TAXI_DEBUG_SPOT_COLORS.reserved, 1.25, 3.0)
+  drawDebugSpotCylinder(reservedDropoffSpot, TAXI_DEBUG_SPOT_COLORS.reserved, 1.25, 3.0)
+end
+
+local function getTaxiSpotDebugStats()
+  findParkingSpots()
+  local pickupSpots = findValidPickupSpots()
+  local busStops = getDebugBusStops()
+
+  return {
+    enabled = taxiSpotDebug.enabled,
+    mode = taxiSpotDebug.mode,
+    allSpots = #(allTaxiSpots or {}),
+    nearbyPickupSpots = #(pickupSpots or {}),
+    busStops = #(busStops or {})
+  }
+end
+
+function M.debugDrawTaxiSpots(enabled, mode)
+  taxiSpotDebug.enabled = enabled ~= false
+  taxiSpotDebug.mode = tostring(mode or "all"):lower()
+  if taxiSpotDebug.mode ~= "all" and taxiSpotDebug.mode ~= "nearby" and taxiSpotDebug.mode ~= "bus" then
+    taxiSpotDebug.mode = "all"
+  end
+
+  pickupCacheVehiclePos = nil
+  validPickupSpots = nil
+
+  local stats = getTaxiSpotDebugStats()
+  log("I", logTag, string.format("Taxi spot debug draw %s. Mode: %s, all spots: %d, nearby pickups: %d, bus stops: %d",
+    stats.enabled and "enabled" or "disabled", stats.mode, stats.allSpots, stats.nearbyPickupSpots, stats.busStops))
+  return stats
+end
+
+function M.debugShowAllTaxiSpots(enabled)
+  return M.debugDrawTaxiSpots(enabled, "all")
+end
+
+function M.debugListTaxiSpots()
+  findParkingSpots()
+  pickupCacheVehiclePos = nil
+  validPickupSpots = nil
+
+  local pickupSpots = findValidPickupSpots()
+  local busStops = getDebugBusStops()
+  local pickupLookup = {}
+  for _, spot in ipairs(pickupSpots or {}) do
+    pickupLookup[spot] = true
+  end
+
+  local vehicle = getPlayerVehicle()
+  local vehiclePos = vehicle and vehicle:getPosition() or nil
+  local total = #(allTaxiSpots or {})
+
+  log("I", logTag, string.format("BUBER taxi spots: %d all spots, %d nearby pickup candidates, %d bus stops.", total, #(pickupSpots or {}), #(busStops or {})))
+
+  for index, spot in ipairs(allTaxiSpots or {}) do
+    local pos = spot and spot.pos
+    local spotPath = safeSpotPath(spot) or tostring(spot and spot.name or ("spot_" .. index))
+    local distance = (vehiclePos and pos) and (pos - vehiclePos):length() or 0
+    local pickupText = pickupLookup[spot] and "yes" or "no"
+    local emptyText = isSpotEmpty(spot) and "yes" or "no"
+
+    if pos then
+      log("I", logTag, string.format("#%03d pickup=%s empty=%s dist=%.1fm pos=(%.2f, %.2f, %.2f) %s",
+        index, pickupText, emptyText, distance, pos.x, pos.y, pos.z, spotPath))
+    else
+      log("I", logTag, string.format("#%03d pickup=%s empty=%s %s", index, pickupText, emptyText, spotPath))
+    end
+  end
+
+  for index, stop in ipairs(busStops or {}) do
+    local pos = stop and stop.pos
+    local stopName = tostring(stop and (stop.debugName or stop.stopName or stop.name) or ("bus_stop_" .. index))
+    local distance = (vehiclePos and pos) and (pos - vehiclePos):length() or 0
+
+    if pos then
+      log("I", logTag, string.format("BUS #%03d dist=%.1fm pos=(%.2f, %.2f, %.2f) %s",
+        index, distance, pos.x, pos.y, pos.z, stopName))
+    else
+      log("I", logTag, string.format("BUS #%03d %s", index, stopName))
+    end
+  end
+
+  return {
+    allSpots = total,
+    nearbyPickupSpots = #(pickupSpots or {}),
+    busStops = #(busStops or {})
+  }
+end
+
 local function drawActiveTaxiZone()
   if not debugDrawer or not state.currentFare then return end
 
@@ -2734,12 +3062,15 @@ local function drawActiveTaxiZone()
   debugDrawer:drawCylinder(bottomPos:toPoint3F(), topPos:toPoint3F(), TAXI_ZONE_DRAW_RADIUS, makeColorF(colorValues))
 end
 
-local function teardownTaxiMarkers() end
+local function teardownTaxiMarkers()
+  taxiSpotDebug.enabled = false
+end
 
 -- ================================
 -- MAIN UPDATE LOOP
 -- ================================
 local function update(dt)
+  drawDebugTaxiSpots()
   drawActiveTaxiZone()
 
   -- Handle completed fare display timeout
@@ -3062,6 +3393,9 @@ M.getInventoryIdSafe = M.getInventoryIdSafe
 M.isHardcoreModeEnabled = M.isHardcoreModeEnabled
 M.getEconomySectionMultiplier = M.getEconomySectionMultiplier
 M.isTaxiJobActive = M.isTaxiJobActive
+M.debugDrawTaxiSpots = M.debugDrawTaxiSpots
+M.debugShowAllTaxiSpots = M.debugShowAllTaxiSpots
+M.debugListTaxiSpots = M.debugListTaxiSpots
 
 M.saveCareerAfterDropoff = M.saveCareerAfterDropoff
 

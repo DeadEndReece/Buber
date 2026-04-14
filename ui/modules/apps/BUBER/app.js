@@ -282,6 +282,11 @@ app.controller('BuberController', ['$scope', '$sce', '$timeout', function ($scop
     return fare.routeMode === 'multistop'
   }
 
+  function isSharedRide(fare) {
+    fare = fare || getFare()
+    return isMultiStop(fare) && fare.routeType === 'shared'
+  }
+
   function isPenaltyResult() {
     var lastFare = $scope.taxi.lastCompletedFare
     return lastFare && lastFare.resultType === 'abandoned'
@@ -622,12 +627,13 @@ app.controller('BuberController', ['$scope', '$sce', '$timeout', function ($scop
     var state = $scope.taxi.state
     var fare = getFare()
     var multi = isMultiStop(fare)
+    var shared = isSharedRide(fare)
 
     // Multi-stop overrides
     if (multi) {
-      if (state === STATES.ACCEPT) return 'New multi-stop route'
-      if (state === STATES.PICKUP) return 'Drive to first stop'
-      if (state === STATES.DROPOFF) return 'Multi-stop route active'
+      if (state === STATES.ACCEPT) return shared ? 'New shared ride' : 'New multi-stop route'
+      if (state === STATES.PICKUP) return shared ? 'Drive to shared pickup' : 'Drive to first stop'
+      if (state === STATES.DROPOFF) return shared ? 'Shared ride active' : 'Multi-stop route active'
     }
 
     // Default titles
@@ -650,18 +656,23 @@ app.controller('BuberController', ['$scope', '$sce', '$timeout', function ($scop
     var state = $scope.taxi.state
     var fare = getFare()
     var multi = isMultiStop(fare)
+    var shared = isSharedRide(fare)
 
     if (multi) {
       if (state === STATES.ACCEPT) {
-        return 'Review the scheduled line and decide whether to take the route.'
+        return shared ? 'Review the shared ride and decide whether to take the group.' : 'Review the scheduled line and decide whether to take the route.'
       }
       if (state === STATES.PICKUP) {
         var pickupName = (fare.pickup && fare.pickup.stopName) || 'the first stop'
-        return 'Head to ' + pickupName + ' to begin ' + (fare.routeLabel || 'the route') + '.'
+        return shared
+          ? 'Head to ' + pickupName + ' to collect the shared ride.'
+          : 'Head to ' + pickupName + ' to begin ' + (fare.routeLabel || 'the route') + '.'
       }
       if (state === STATES.DROPOFF) {
-        return 'Continue along ' + (fare.routeLabel || 'the route') + ' toward ' +
-               (fare.nextStopName || 'the next stop') + '.'
+        return shared
+          ? 'Drop each passenger off in order. Next: ' + (fare.nextStopName || 'next drop-off') + '.'
+          : 'Continue along ' + (fare.routeLabel || 'the route') + ' toward ' +
+             (fare.nextStopName || 'the next stop') + '.'
       }
     }
 
@@ -680,11 +691,12 @@ app.controller('BuberController', ['$scope', '$sce', '$timeout', function ($scop
     var state = $scope.taxi.state
     var fare = getFare()
     var multi = isMultiStop(fare)
+    var shared = isSharedRide(fare)
 
     if (multi) {
-      if (state === STATES.ACCEPT) return 'Scheduled route ready for review.'
-      if (state === STATES.PICKUP) return 'First stop marked. Start the line.'
-      if (state === STATES.DROPOFF) return 'On route to ' + (fare.nextStopName || 'the next stop') + '.'
+      if (state === STATES.ACCEPT) return shared ? 'Shared ride ready for review.' : 'Scheduled route ready for review.'
+      if (state === STATES.PICKUP) return shared ? 'Shared pickup marked.' : 'First stop marked. Start the line.'
+      if (state === STATES.DROPOFF) return shared ? 'Next drop-off: ' + (fare.nextStopName || 'the next stop') + '.' : 'On route to ' + (fare.nextStopName || 'the next stop') + '.'
     }
 
     if (state === STATES.READY && $scope.hasLockedMultiStop()) {
@@ -745,9 +757,11 @@ app.controller('BuberController', ['$scope', '$sce', '$timeout', function ($scop
   // ---------------------------------------------------------------------------
 
   $scope.isMultiStopFare = isMultiStop
+  $scope.isSharedRide = isSharedRide
 
   $scope.getOfferPopupHeadline = function () {
     var fare = getFare()
+    if (isSharedRide(fare)) return fare.routeLabel || 'Shared ride'
     return isMultiStop(fare)
       ? (fare.routeLabel || 'Multi-stop route')
       : (fare.passengerTypeName || $scope.taxi.currentPassengerType || 'Standard')
@@ -760,7 +774,7 @@ app.controller('BuberController', ['$scope', '$sce', '$timeout', function ($scop
   }
 
   $scope.getOfferRouteLabel = function () {
-    return isMultiStop(getFare()) ? 'Stops' : 'Route'
+    return isSharedRide(getFare()) ? 'Drop-offs' : (isMultiStop(getFare()) ? 'Stops' : 'Route')
   }
 
   $scope.getOfferRouteValue = function () {
@@ -803,17 +817,23 @@ app.controller('BuberController', ['$scope', '$sce', '$timeout', function ($scop
   $scope.getLiveFareHeadline = function () {
     var fare = getFare()
     if (isMultiStop(fare)) {
+      if (isSharedRide(fare)) {
+        return $scope.taxi.state === STATES.DROPOFF ? 'Shared ride in progress' : 'Heading to shared pickup'
+      }
       return $scope.taxi.state === STATES.DROPOFF ? 'Route in progress' : 'Heading to first stop'
     }
     return $scope.taxi.state === STATES.DROPOFF ? 'Passenger onboard' : 'Heading to pickup'
   }
 
   $scope.getLiveCardPrimaryLabel = function () {
-    return isMultiStop(getFare()) ? 'Route' : 'Passenger type'
+    return isSharedRide(getFare()) ? 'Ride type' : (isMultiStop(getFare()) ? 'Route' : 'Passenger type')
   }
 
   $scope.getLiveCardPrimaryValue = function () {
     var fare = getFare()
+    if (isSharedRide(fare)) {
+      return fare.routeLabel || 'Shared ride'
+    }
     if (isMultiStop(fare)) {
       return fare.routeLabel || 'Multi-stop'
     }
@@ -821,6 +841,9 @@ app.controller('BuberController', ['$scope', '$sce', '$timeout', function ($scop
   }
 
   $scope.getLiveCardSecondaryLabel = function () {
+    if (isSharedRide(getFare())) {
+      return $scope.taxi.state === STATES.DROPOFF ? 'Next drop-off' : 'Pickup'
+    }
     return isMultiStop(getFare())
       ? ($scope.taxi.state === STATES.DROPOFF ? 'Next stop' : 'First stop')
       : 'Passengers'
@@ -838,6 +861,9 @@ app.controller('BuberController', ['$scope', '$sce', '$timeout', function ($scop
   }
 
   $scope.getLiveCardTertiaryLabel = function () {
+    if (isSharedRide(getFare())) {
+      return $scope.taxi.state === STATES.DROPOFF ? 'Drop-offs left' : 'Drop-offs'
+    }
     return isMultiStop(getFare())
       ? ($scope.taxi.state === STATES.DROPOFF ? 'Stops left' : 'Dropoffs')
       : 'Meter'
@@ -890,6 +916,9 @@ app.controller('BuberController', ['$scope', '$sce', '$timeout', function ($scop
       return String(stopService.instructionHtml)
     }
 
+    if (isSharedRide(fare)) {
+      return $scope.taxi.state === STATES.PICKUP ? 'Proceed to shared pickup' : 'Proceed to next drop-off'
+    }
     return $scope.taxi.state === STATES.PICKUP ? 'Proceed to first stop' : 'Proceed to next stop'
   }
 
@@ -910,7 +939,10 @@ app.controller('BuberController', ['$scope', '$sce', '$timeout', function ($scop
     if (state === STATES.COMPLETE) return penalty ? 'PENALTY' : 'COMPLETE'
     if (isReturnToVehicleActive()) return 'RETURN'
     if ($scope.hasStopService()) return state === STATES.PICKUP ? 'BOARDING' : 'SERVICE'
-    if (multi) return state === STATES.DROPOFF ? 'ON ROUTE' : 'TO STOP'
+    if (multi) {
+      if (isSharedRide(fare)) return state === STATES.DROPOFF ? 'SHARED' : 'PICKUP'
+      return state === STATES.DROPOFF ? 'ON ROUTE' : 'TO STOP'
+    }
 
     switch (state) {
       case STATES.DROPOFF: return 'HIRED'
@@ -997,10 +1029,10 @@ app.controller('BuberController', ['$scope', '$sce', '$timeout', function ($scop
     }
 
     if (isMultiStop(fare)) {
-      if (state === STATES.PICKUP) return 'FIRST STOP'
+      if (state === STATES.PICKUP) return isSharedRide(fare) ? 'PICKUP' : 'FIRST STOP'
       var total = Math.max(1, $scope.getMultiStopDropoffCount(fare))
       var current = Math.min(total, Math.max(1, $scope.getCompletedDropoffCount(fare) + 1))
-      return 'STOP ' + current + ' / ' + total
+      return (isSharedRide(fare) ? 'DROP ' : 'STOP ') + current + ' / ' + total
     }
 
     return state === STATES.DROPOFF ? 'DROP OFF' : 'PICKUP'
@@ -1014,7 +1046,8 @@ app.controller('BuberController', ['$scope', '$sce', '$timeout', function ($scop
       return penalty ? 'RATING HIT' : 'TOTAL FARE'
     }
 
-    return isMultiStop(fare) ? 'ROUTE FARE'
+    return isSharedRide(fare) ? 'SHARED FARE'
+      : isMultiStop(fare) ? 'ROUTE FARE'
       : ($scope.taxi.state === STATES.DROPOFF ? 'EST FARE' : 'CALL FARE')
   }
 
@@ -1033,7 +1066,7 @@ app.controller('BuberController', ['$scope', '$sce', '$timeout', function ($scop
     if ($scope.hasStopService()) {
       var stopService = $scope.getStopService()
       if (stopService && stopService.instructionStep === 'close') return 'DOORS'
-      return isMultiStop(fare) ? 'WAIT PAX' : 'WAIT SEC'
+      return isSharedRide(fare) ? 'WAIT SEC' : (isMultiStop(fare) ? 'WAIT PAX' : 'WAIT SEC')
     }
 
     if (isMultiStop(fare) && $scope.taxi.state === STATES.DROPOFF) {
@@ -1068,7 +1101,7 @@ app.controller('BuberController', ['$scope', '$sce', '$timeout', function ($scop
       if ($scope.taxi.state === STATES.PICKUP) {
         return ((fare.pickup && fare.pickup.stopName) || fare.routeLabel || 'MULTI-STOP').toUpperCase()
       }
-      return (fare.nextStopName || fare.routeLabel || 'NEXT STOP').toUpperCase()
+      return (fare.nextStopName || fare.routeLabel || (isSharedRide(fare) ? 'NEXT DROP-OFF' : 'NEXT STOP')).toUpperCase()
     }
 
     return (fare.passengerTypeName || $scope.taxi.currentPassengerType || 'Standard').toUpperCase()
