@@ -1,0 +1,19 @@
+{
+  "domElement": "<buberapp></buberapp>",
+  "name": "BUBER",
+  "types": [
+    "ui.apps.categories.multiplayer"
+  ],
+  "css": {
+    "left": "0px",
+    "right": "",
+    "top": "250px",
+    "min-width": "500px",
+    "width": "500px",
+    "height": "420px"
+  },
+  "description": "Dispatch and fare management panel for BUBER.",
+  "author": "DeadEndReece + Codex",
+  "version": "0.4.0",
+  "directive": "buberapp"
+}

@@ -1,0 +1,501 @@
+<div
+  ng-controller="BuberController"
+  class="buber-root is-left-anchored"
+  ng-class="getUiPositionClasses()"
+  ng-attr-style="{{ getUiSettingsStyle() }}"
+  ng-init="init()"
+>
+  <link rel="stylesheet" type="text/css" href="/ui/modules/apps/BUBER/app.css">
+
+  <section class="buber-offer-popup" ng-if="showFarePopup()">
+    <header class="buber-offer-popup-head">
+      <div>
+        <span>Incoming fare</span>
+        <strong>{{ getOfferPopupHeadline() }}</strong>
+      </div>
+      <button type="button" class="buber-popup-close" ng-click="dismissOfferPopup()">&times;</button>
+    </header>
+
+    <div class="buber-offer-popup-grid">
+      <div>
+        <span class="label">Passengers</span>
+        <strong>{{ taxi.currentFare.passengers || 0 }}</strong>
+      </div>
+      <div>
+        <span class="label">Base fare</span>
+        <strong>{{ formatMoney(taxi.currentFare.initialBaseFare || taxi.currentFare.baseFare) }}</strong>
+      </div>
+      <div>
+        <span class="label">{{ getOfferRouteLabel() }}</span>
+        <strong>{{ getOfferRouteValue() }}</strong>
+      </div>
+      <div>
+        <span class="label">Fare Rating</span>
+        <strong>{{ formatRating(taxi.currentFare.passengerRating) }}</strong>
+      </div>
+    </div>
+
+    <p>{{ getOfferDescription() }}</p>
+
+    <div class="buber-offer-popup-actions">
+      <button type="button" class="primary" ng-click="acceptJob()">Accept Fare</button>
+      <button type="button" class="secondary" ng-click="rejectJob()">Reject Fare</button>
+    </div>
+  </section>
+
+  <div id="taxi-main-container">
+    <div id="taxi-container" ng-class="{ 'is-open': ui.open }">
+      <section class="buber-app">
+        <header class="buber-header">
+          <div class="buber-brand">
+            <p class="buber-brand-line">BUBER</p>
+          </div>
+        </header>
+
+        <nav class="buber-page-tabs">
+          <button
+            type="button"
+            ng-class="{ 'is-active': isActivePage('dashboard') }"
+            ng-click="setActivePage('dashboard')"
+          >
+            Dashboard
+          </button>
+          <button
+            type="button"
+            ng-class="{ 'is-active': isActivePage('progression') }"
+            ng-click="setActivePage('progression')"
+          >
+            Progression
+          </button>
+        </nav>
+
+        <section class="buber-overview">
+          <div class="buber-status-block">
+            <span class="buber-summary-label">Current Status</span>
+            <div class="buber-status-line">
+              <button
+                type="button"
+                class="buber-duty-pill buber-duty-toggle"
+                ng-class="{ 'is-on': isOnDuty(), 'is-off': !isOnDuty() }"
+                ng-click="toggleDuty()"
+                ng-disabled="!canToggleDuty()"
+              >
+                {{ isOnDuty() ? 'On Duty' : 'Off Duty' }}
+              </button>
+              <span class="buber-status-note">{{ getSummaryNote() || getDispatchHint() }}</span>
+            </div>
+          </div>
+
+          <div class="buber-earnings-block">
+            <span class="buber-summary-label">Session Earnings</span>
+            <strong>{{ formatMoney(taxi.cumulativeReward) }}</strong>
+          </div>
+
+          <button
+            type="button"
+            class="buber-settings-gear"
+            ng-class="{ 'is-active': ui.settingsOpen }"
+            ng-click="toggleSettings()"
+            title="UI Settings"
+          >
+            &#9881;
+          </button>
+        </section>
+
+        <section class="buber-card buber-settings" ng-if="ui.settingsOpen">
+          <div class="buber-card-head">
+            <span>UI Settings</span>
+            <strong>Panel layout</strong>
+          </div>
+          <div class="buber-settings-body" ng-if="ui.settingsOpen">
+            <div class="buber-settings-grid">
+              <div class="buber-setting-row">
+                <label>
+                  <span>Panel opacity</span>
+                  <strong>{{ formatPercent(ui.settings.mainOpacity) }}</strong>
+                </label>
+                <input
+                  type="range"
+                  min="0.35"
+                  max="1"
+                  step="0.05"
+                  ng-model="ui.settings.mainOpacity"
+                  ng-change="setUiSetting('mainOpacity', ui.settings.mainOpacity)"
+                >
+              </div>
+
+              <div class="buber-setting-row">
+                <label>
+                  <span>Panel size</span>
+                  <strong>{{ formatScale(ui.settings.mainScale) }}</strong>
+                </label>
+                <input
+                  type="range"
+                  min="0.75"
+                  max="1"
+                  step="0.05"
+                  ng-model="ui.settings.mainScale"
+                  ng-change="setUiSetting('mainScale', ui.settings.mainScale)"
+                >
+              </div>
+
+              <div class="buber-setting-row">
+                <label>
+                  <span>Popup opacity</span>
+                  <strong>{{ formatPercent(ui.settings.popupOpacity) }}</strong>
+                </label>
+                <input
+                  type="range"
+                  min="0.35"
+                  max="1"
+                  step="0.05"
+                  ng-model="ui.settings.popupOpacity"
+                  ng-change="setUiSetting('popupOpacity', ui.settings.popupOpacity)"
+                >
+              </div>
+
+              <div class="buber-setting-row">
+                <label>
+                  <span>Popup size</span>
+                  <strong>{{ formatScale(ui.settings.popupScale) }}</strong>
+                </label>
+                <input
+                  type="range"
+                  min="0.75"
+                  max="1"
+                  step="0.05"
+                  ng-model="ui.settings.popupScale"
+                  ng-change="setUiSetting('popupScale', ui.settings.popupScale)"
+                >
+              </div>
+
+              <div class="buber-setting-row">
+                <label>
+                  <span>Popup location</span>
+                </label>
+                <div class="buber-position-options">
+                  <button
+                    type="button"
+                    ng-repeat="option in uiPositionOptions"
+                    ng-class="{ 'is-selected': ui.settings.popupPosition === option.value }"
+                    ng-click="ui.settings.popupPosition = option.value; setUiSetting('popupPosition', ui.settings.popupPosition)"
+                  >
+                    {{ option.label }}
+                  </button>
+                </div>
+              </div>
+
+              <div class="buber-setting-row">
+                <label>
+                  <span>Meter location</span>
+                </label>
+                <div class="buber-position-options">
+                  <button
+                    type="button"
+                    ng-repeat="option in uiPositionOptions"
+                    ng-class="{ 'is-selected': ui.settings.meterPosition === option.value }"
+                    ng-click="ui.settings.meterPosition = option.value; setUiSetting('meterPosition', ui.settings.meterPosition)"
+                  >
+                    {{ option.label }}
+                  </button>
+                </div>
+              </div>
+
+              <div class="buber-setting-row">
+                <label>
+                  <span>Meter opacity</span>
+                  <strong>{{ formatPercent(ui.settings.meterOpacity) }}</strong>
+                </label>
+                <input
+                  type="range"
+                  min="0.35"
+                  max="1"
+                  step="0.05"
+                  ng-model="ui.settings.meterOpacity"
+                  ng-change="setUiSetting('meterOpacity', ui.settings.meterOpacity)"
+                >
+              </div>
+
+              <div class="buber-setting-row">
+                <label>
+                  <span>Meter size</span>
+                  <strong>{{ formatScale(ui.settings.meterScale) }}</strong>
+                </label>
+                <input
+                  type="range"
+                  min="0.75"
+                  max="1"
+                  step="0.05"
+                  ng-model="ui.settings.meterScale"
+                  ng-change="setUiSetting('meterScale', ui.settings.meterScale)"
+                >
+              </div>
+            </div>
+
+            <div class="buber-settings-actions">
+              <label class="buber-settings-check">
+                <input
+                  type="checkbox"
+                  ng-model="ui.settings.meterEnabled"
+                  ng-change="setUiSetting('meterEnabled', ui.settings.meterEnabled)"
+                >
+                <span>Show meter</span>
+              </label>
+              <button type="button" class="secondary" ng-click="resetUiSettings()">Reset UI</button>
+            </div>
+          </div>
+        </section>
+
+        <div class="buber-page buber-progression" ng-if="isActivePage('progression')">
+          <section class="buber-card buber-progression-hero">
+            <div class="buber-card-head">
+              <span>Driver Progression</span>
+              <strong>{{ formatRating(getProgression().rating) }} / {{ formatRating(getProgression().maxRating) }}</strong>
+            </div>
+            <div class="buber-progress-track">
+              <div class="buber-progress-fill" ng-style="{ width: getProgressRatingPercent() }"></div>
+            </div>
+            <p>{{ getNextUnlockText() }}</p>
+          </section>
+
+          <section class="buber-progression-limits">
+            <div class="buber-snapshot-item">
+              <span>Direct cap</span>
+              <strong>{{ formatMoney(getProgression().directCap) }}</strong>
+            </div>
+            <div class="buber-snapshot-item">
+              <span>Bus routes</span>
+              <strong>{{ getProgressionMultiStopCapDisplay() }}</strong>
+            </div>
+            <div class="buber-snapshot-item">
+              <span>Seat cap</span>
+              <strong>{{ getProgressionSeatDisplay() }}</strong>
+            </div>
+            <div class="buber-snapshot-item">
+              <span>Usable seats</span>
+              <strong>{{ getProgression().availableSeats || 0 }}</strong>
+            </div>
+          </section>
+
+          <section class="buber-card buber-milestones">
+            <div class="buber-card-head">
+              <span>Unlock Ladder</span>
+              <strong>{{ getProgression().multiStopUnlocked ? 'Routes unlocked' : 'Routes locked until 2.0' }}</strong>
+            </div>
+
+            <div class="buber-milestone-list">
+              <div
+                class="buber-milestone"
+                ng-repeat="milestone in getProgressionMilestones()"
+                ng-class="{ 'is-unlocked': milestone.unlocked, 'is-past': isPastProgressionMilestone(milestone), 'is-next': getNextUnlock() && getNextUnlock().rating === milestone.rating, 'is-selected': isSelectedProgressionMilestone(milestone) }"
+              >
+                <button
+                  type="button"
+                  class="buber-milestone-main"
+                  ng-click="selectProgressionMilestone(milestone)"
+                >
+                  <span>{{ formatRating(milestone.rating) }}</span>
+                  <div>
+                    <strong>{{ milestone.label }}</strong>
+                    <p>{{ milestone.unlocked ? 'Unlocked' : (getNextUnlock() && getNextUnlock().rating === milestone.rating ? 'Next unlock' : 'Locked') }}</p>
+                  </div>
+                </button>
+
+                <div class="buber-milestone-stats" ng-if="isSelectedProgressionMilestone(milestone)">
+                  <p class="buber-milestone-description">{{ milestone.description }}</p>
+                  <div>
+                    <span>Direct</span>
+                    <strong>{{ formatMoney(milestone.directCap) }}</strong>
+                  </div>
+                  <div>
+                    <span>Bus routes</span>
+                    <strong>{{ getMilestoneMultiStopCapDisplay(milestone) }}</strong>
+                  </div>
+                  <div>
+                    <span>Seats</span>
+                    <strong>{{ getProgressionSeatDisplay(milestone) }}</strong>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <div class="buber-page buber-dashboard" ng-if="isActivePage('dashboard')">
+        <section class="buber-snapshot">
+          <div class="buber-snapshot-item">
+            <span>Driver rating</span>
+            <strong>{{ formatRating(taxi.playerRating) }}</strong>
+          </div>
+          <div class="buber-snapshot-item">
+            <span>Open seats</span>
+            <strong>{{ taxi.availableSeats || 0 }}</strong>
+          </div>
+          <div class="buber-snapshot-item">
+            <span>Fare streak</span>
+            <strong>{{ taxi.fareStreak || 0 }}</strong>
+          </div>
+          <div class="buber-snapshot-item" ng-attr-title="{{ taxi.vehicleClassDescription || '' }}">
+            <span>Vehicle class</span>
+            <strong>{{ getVehicleClassDisplay() }}</strong>
+          </div>
+          <div class="buber-snapshot-item">
+            <span>Class pay</span>
+            <strong>{{ getVehicleClassPayDisplay() }}</strong>
+          </div>
+          <div class="buber-snapshot-item">
+            <span>Last passenger</span>
+            <strong>{{ formatRating(taxi.lastPassengerRating) }}</strong>
+          </div>
+        </section>
+
+        <section class="buber-card is-warning" ng-if="taxi.taxiDisabled">
+          <div class="buber-card-head">
+            <span>BUBER unavailable</span>
+            <strong>Vehicle check required</strong>
+          </div>
+          <p>{{ taxi.disabledReason || 'BUBER is currently unavailable.' }}</p>
+        </section>
+
+        <section class="buber-card is-offer" ng-if="hasFareOffer()">
+          <div class="buber-card-head">
+            <span>Incoming fare</span>
+            <strong>{{ taxi.currentFare.passengerTypeName || taxi.currentPassengerType || 'Standard' }}</strong>
+          </div>
+
+          <div class="buber-mini-grid">
+            <div>
+              <span class="label">Passengers</span>
+              <strong>{{ taxi.currentFare.passengers || 0 }}</strong>
+            </div>
+            <div>
+              <span class="label">Base fare</span>
+              <strong>{{ formatMoney(taxi.currentFare.initialBaseFare || taxi.currentFare.baseFare) }}</strong>
+            </div>
+          </div>
+
+          <p class="buber-description">{{ taxi.currentFare.passengerDescription || 'A new fare is waiting for your response.' }}</p>
+        </section>
+
+        <section class="buber-card is-live" ng-if="hasLiveFare()">
+          <div class="buber-card-head">
+            <span>Live fare</span>
+            <strong>{{ getLiveFareHeadline() }}</strong>
+          </div>
+
+          <div class="buber-live-strip">
+            <div>
+              <span class="label">{{ getLiveCardPrimaryLabel() }}</span>
+              <strong>{{ getLiveCardPrimaryValue() }}</strong>
+            </div>
+            <div>
+              <span class="label">{{ getLiveCardSecondaryLabel() }}</span>
+              <strong>{{ getLiveCardSecondaryValue() }}</strong>
+            </div>
+            <div>
+              <span class="label">{{ getLiveCardTertiaryLabel() }}</span>
+              <strong>{{ getLiveCardTertiaryValue() }}</strong>
+            </div>
+          </div>
+        </section>
+
+        <section class="buber-card" ng-if="hasCompletedFare()">
+          <div class="buber-card-head">
+            <span>Latest payout</span>
+            <strong>{{ formatMoney(getCompletedFare().totalFare) }}</strong>
+          </div>
+
+          <div class="buber-mini-grid">
+            <div>
+              <span class="label">Distance</span>
+              <strong>{{ formatDistance(getCompletedFare().totalDistance) }}</strong>
+            </div>
+            <div>
+              <span class="label">Tips</span>
+              <strong>{{ formatMoney(getCompletedFare().totalTips) }}</strong>
+            </div>
+            <div ng-if="getCompletedFare().tipCapReduction">
+              <span class="label">Tip limit</span>
+              <strong>-{{ formatMoney(getCompletedFare().tipCapReduction) }}</strong>
+            </div>
+            <div ng-if="getCompletedFare().payoutSoftCapReduction">
+              <span class="label">Payout limit</span>
+              <strong>-{{ formatMoney(getCompletedFare().payoutSoftCapReduction) }}</strong>
+            </div>
+            <div ng-if="getCompletedFare().payoutLevelCapReduction">
+              <span class="label">Rating cap</span>
+              <strong>-{{ formatMoney(getCompletedFare().payoutLevelCapReduction) }}</strong>
+            </div>
+            <div>
+              <span class="label">Time multiplier</span>
+              <strong>x{{ getCompletedFare().timeMultiplier || '1.0' }}</strong>
+            </div>
+            <div>
+              <span class="label">Passenger rating</span>
+              <strong>{{ formatRating(taxi.lastPassengerRating) }}</strong>
+            </div>
+          </div>
+        </section>
+
+        <section class="buber-card is-ready" ng-if="taxi.state === 'ready' && !taxi.taxiDisabled">
+          <div class="buber-card-head">
+            <span>Dispatch live</span>
+            <strong>{{ hasLockedMultiStop() ? 'Direct fares active' : (hasSuccessfulCompletedFare() ? 'Waiting for the next passenger' : 'Waiting for the first call') }}</strong>
+          </div>
+          <p>{{ hasLockedMultiStop() ? getMultiStopUnlockText() : 'Keep driving and dispatch will send the next nearby pickup automatically.' }}</p>
+        </section>
+
+        <section class="buber-actions" ng-if="hasFareOffer()">
+          <button class="primary" ng-click="acceptJob()">Accept Fare</button>
+          <button class="secondary" ng-click="rejectJob()">Reject Fare</button>
+        </section>
+        </div>
+      </section>
+    </div>
+
+    <button class="buber-tab" id="taxi-show-button" ng-click="toggleOpen()">T</button>
+  </div>
+
+  <section class="buber-meter" ng-if="showTaxiMeter()">
+    <div class="buber-meter-header">
+      <span>BUBER</span>
+      <strong>{{ getMeterStatus() }}</strong>
+    </div>
+
+    <div class="buber-meter-grid">
+      <div class="buber-meter-cell is-fare">
+        <span>{{ getMeterFareLabel() }}</span>
+        <strong>{{ getMeterFareDisplay() }}</strong>
+      </div>
+      <div class="buber-meter-cell">
+        <span>{{ getMeterDistanceLabel() }}</span>
+        <strong>{{ getMeterDistance() }}</strong>
+      </div>
+      <div class="buber-meter-cell">
+        <span>{{ getMeterPassengerLabel() }}</span>
+        <strong>{{ getMeterPassengers() }}</strong>
+      </div>
+    </div>
+
+    <div
+      class="buber-meter-instruction"
+      ng-if="hasMeterInstruction()"
+      ng-bind-html="getMeterInstructionHtml()"
+    ></div>
+
+    <div class="buber-meter-footer">
+      <span>{{ getMeterStageLabel() }}</span>
+      <div class="buber-meter-action">
+        <button
+          type="button"
+          class="buber-meter-abandon"
+          ng-if="canAbandonJob()"
+          ng-click="abandonJob()"
+        >
+          ABANDON JOB
+        </button>
+      </div>
+      <span>{{ getMeterPassengerType() }}</span>
+    </div>
+  </section>
+</div>

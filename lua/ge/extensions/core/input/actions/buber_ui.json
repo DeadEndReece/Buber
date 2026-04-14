@@ -1,0 +1,11 @@
+{
+  "buber_toggle_ui": {
+    "title": "Toggle BUBER UI",
+    "desc": "Open or close the BUBER dispatch overlay.",
+    "cat": "Menu",
+    "order": 851,
+    "ctx": "elua",
+    "actionMap": "Global",
+    "onDown": "if guihooks then guihooks.trigger('buberHotkey') end"
+  }
+}

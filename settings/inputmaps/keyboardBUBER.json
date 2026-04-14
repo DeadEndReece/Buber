@@ -1,0 +1,8 @@
+{
+  "bindings": [
+    {
+      "action": "buber_toggle_ui",
+      "control": "t"
+    }
+  ]
+}
