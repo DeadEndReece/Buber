@@ -168,25 +168,6 @@ You can adjust:
 
 Settings are saved and restored so the meter keeps its chosen layout after UI reloads or tow/recovery events.
 
-## Debug Location Commands
-
-Temporary debug commands are available while testing weird pickup, drop-off, or bus stop locations.
-
-```lua
-extensions.gameplay_taxi.debugShowAllTaxiSpots(true)
-extensions.gameplay_taxi.debugDrawTaxiSpots(true, "nearby")
-extensions.gameplay_taxi.debugDrawTaxiSpots(true, "bus")
-extensions.gameplay_taxi.debugDrawTaxiSpots(false)
-extensions.gameplay_taxi.debugListTaxiSpots()
-```
-
-Debug colors:
-
-- Green: all taxi/drop-off candidate spots.
-- Yellow: nearby pickup candidates.
-- Blue: bus stops.
-- Red: currently reserved BUBER pickup/drop-off spot.
-
 ## Installation
 
 Install the packaged BUBER zip like a normal BeamNG.drive mod.
@@ -194,6 +175,5 @@ Install the packaged BUBER zip like a normal BeamNG.drive mod.
 ## Notes
 
 - BUBER is built for BeamNG.drive Career Mode.
-- Loaner vehicles and disabled taxi economy states are blocked.
 - Some route features depend on the current level having suitable taxi spots or bus route data.
 - The in-game UI must be added to your layout before you can control the service from the app.
