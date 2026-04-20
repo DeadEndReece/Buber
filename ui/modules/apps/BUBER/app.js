@@ -227,7 +227,7 @@ app.directive('buberapp', [function () {
   }
 }])
 
-app.controller('BuberController', ['$scope', '$sce', '$timeout', function ($scope, $sce, $timeout) {
+app.controller('BuberController', ['$scope', '$sce', '$timeout', '$interval', '$element', function ($scope, $sce, $timeout, $interval, $element) {
   // ---------------------------------------------------------------------------
   // Internal helpers
   // ---------------------------------------------------------------------------
@@ -271,6 +271,50 @@ app.controller('BuberController', ['$scope', '$sce', '$timeout', function ($scop
       $timeout.cancel(pendingSettingSaves[key])
       delete pendingSettingSaves[key]
     })
+  }
+
+  function getRootElement() {
+    return ($element && $element[0]) || document.querySelector('.buber-root')
+  }
+
+  function updateTabSize() {
+    var root = getRootElement()
+    var button = root ? root.querySelector('#taxi-show-button') : null
+    if (!root || !button) return
+
+    var isVerticalDock = root.classList.contains('is-left-anchored') || root.classList.contains('is-right-anchored')
+    button.style.width = isVerticalDock ? '28px' : '75px'
+    button.style.height = isVerticalDock ? '75px' : '28px'
+  }
+
+  function setDockSide(side) {
+    var root = getRootElement()
+    if (!root) return
+
+    root.classList.toggle('is-left-anchored', side === 'left')
+    root.classList.toggle('is-right-anchored', side === 'right')
+    root.classList.toggle('is-top-anchored', side === 'top')
+    root.classList.toggle('is-bottom-anchored', side === 'bottom')
+  }
+
+  function updateDockOrientation() {
+    var root = getRootElement()
+    if (!root || !window.innerWidth || !window.innerHeight) return
+
+    var rect = root.getBoundingClientRect()
+    var distances = [
+      { side: 'left', distance: rect.left },
+      { side: 'right', distance: window.innerWidth - rect.right },
+      { side: 'top', distance: rect.top },
+      { side: 'bottom', distance: window.innerHeight - rect.bottom }
+    ]
+
+    distances.sort(function (left, right) {
+      return left.distance - right.distance
+    })
+
+    setDockSide(distances[0].side)
+    updateTabSize()
   }
 
   function getFare() {
@@ -344,6 +388,8 @@ app.controller('BuberController', ['$scope', '$sce', '$timeout', function ($scop
   }
   $scope.taxi = buberDefaultState()
   $scope.uiPositionOptions = BUBER_UI_POSITIONS
+  var dockTimer = $interval(updateDockOrientation, 250)
+  $timeout(updateDockOrientation, 0)
 
   // ---------------------------------------------------------------------------
   // Events
@@ -356,12 +402,14 @@ app.controller('BuberController', ['$scope', '$sce', '$timeout', function ($scop
     $scope.ui.settings = buberNormalizeUiSettings(ui.settings || $scope.ui.settings)
     buberWriteStoredUiSettings($scope.ui.settings)
     $scope.$evalAsync()
+    $timeout(updateDockOrientation, 0)
   })
 
   $scope.$on('buberHotkey', function () {
     $scope.ui.open = !$scope.ui.open
     sendUiAction('toggleOpen')
     requestTaxiState()
+    updateDockOrientation()
     $scope.$evalAsync()
   })
 
@@ -381,6 +429,7 @@ app.controller('BuberController', ['$scope', '$sce', '$timeout', function ($scop
   })
 
   $scope.$on('SettingsChanged', function () {
+    updateDockOrientation()
     $scope.$evalAsync()
   })
 
@@ -391,6 +440,7 @@ app.controller('BuberController', ['$scope', '$sce', '$timeout', function ($scop
   $scope.init = function () {
     sendLua('settings.notifyUI()')
     requestTaxiState()
+    updateDockOrientation()
   }
 
   // ---------------------------------------------------------------------------
@@ -399,12 +449,14 @@ app.controller('BuberController', ['$scope', '$sce', '$timeout', function ($scop
 
   $scope.toggleOpen = function () {
     $scope.ui.open = !$scope.ui.open
+    updateDockOrientation()
     sendUiAction('toggleOpen')
     requestTaxiState()
   }
 
   $scope.close = function () {
     $scope.ui.open = false
+    updateDockOrientation()
     sendUiAction('close')
   }
 
@@ -1113,4 +1165,9 @@ app.controller('BuberController', ['$scope', '$sce', '$timeout', function ($scop
       return { label: key, amount: breakdown[key] }
     })
   }
+
+  $scope.$on('$destroy', function () {
+    cancelPendingSettingSaves()
+    $interval.cancel(dockTimer)
+  })
 }])

@@ -14,6 +14,7 @@ You go on duty, wait for dispatch, accept or reject incoming fares, drive to the
 - Incoming fare popup with passenger count, route length, base fare, and passenger value.
 - Optional taxi meter UI for live trips.
 - Adjustable UI settings for panel size, opacity, popup position, meter size, meter opacity, meter location, and meter toggle.
+- Movable app docking: place the BUBER UI app near the left, right, top, or bottom of the screen and the tab/panel will auto-align to that side.
 - Direct point-to-point fares for normal vehicles.
 - Occasional shared rides for 4+ seat vehicles after route progression unlocks.
 - Full bus route jobs for high-capacity vehicles.
@@ -154,10 +155,13 @@ If passengers are already onboard, BUBER gives you a 20 second timer to return t
 
 Open the BUBER app and press the gear button to change UI settings.
 
+You can also move the BUBER UI app in BeamNG's UI editor. The app automatically detects the nearest screen edge and docks the yellow B tab plus main panel to that side.
+
 You can adjust:
 
 - Main panel opacity.
 - Main panel size.
+- Main app dock side by moving the UI app near the left, right, top, or bottom screen edge.
 - Fare popup opacity.
 - Fare popup size.
 - Fare popup location.
