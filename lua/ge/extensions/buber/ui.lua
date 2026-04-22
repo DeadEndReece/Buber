@@ -154,6 +154,70 @@ local function requestUiState(force)
   pushUiState()
 end
 
+local taxiActionMethods = {
+  setAvailable = "setAvailable",
+  stopTaxiJob = "stopTaxiJob",
+  acceptJob = "acceptJob",
+  rejectJob = "rejectJob",
+  abandonJob = "abandonCurrentJob"
+}
+
+local function getTaxiExtension(methodName)
+  local taxi = extensions and extensions.gameplay_taxi or nil
+  if taxi and type(taxi[methodName]) == "function" then return taxi end
+
+  taxi = gameplay_taxi
+  if taxi and type(taxi[methodName]) == "function" then return taxi end
+
+  if extensions then
+    if extensions.unload and extensions.gameplay_taxi then
+      pcall(extensions.unload, "gameplay_taxi")
+    end
+
+    if setExtensionUnloadMode then
+      pcall(setExtensionUnloadMode, "gameplay_taxi", "manual")
+    end
+
+    local ok, err = false, nil
+    if extensions.loadAtRoot then
+      ok, err = pcall(extensions.loadAtRoot, "lua/ge/extensions/gameplay/taxi", "gameplay")
+    elseif extensions.load then
+      ok, err = pcall(extensions.load, "gameplay_taxi")
+    end
+
+    if not ok then
+      log("E", logTag, "Unable to load BUBER gameplay_taxi: " .. tostring(err or "no extension loader available"))
+    end
+  end
+
+  taxi = extensions and extensions.gameplay_taxi or nil
+  if taxi and type(taxi[methodName]) == "function" then return taxi end
+
+  taxi = gameplay_taxi
+  if taxi and type(taxi[methodName]) == "function" then return taxi end
+
+  return nil
+end
+
+local function callTaxiAction(actionName)
+  local methodName = taxiActionMethods[actionName]
+  if not methodName then return false end
+
+  local taxi = getTaxiExtension(methodName)
+  if not taxi then
+    log("E", logTag, "BUBER taxi action unavailable: " .. tostring(actionName) .. " (" .. tostring(methodName) .. ")")
+    return false
+  end
+
+  local ok, err = pcall(taxi[methodName])
+  if not ok then
+    log("E", logTag, "BUBER taxi action failed: " .. tostring(actionName) .. " - " .. tostring(err))
+    return false
+  end
+
+  return true
+end
+
 
 local function handleUiAction(action)
   local actionName = tostring(action or "")
@@ -164,16 +228,8 @@ local function handleUiAction(action)
     runtime.open = true
   elseif actionName == "close" then
     runtime.open = false
-  elseif actionName == "setAvailable" then
-    extensions.gameplay_taxi.setAvailable()  -- Fixed
-  elseif actionName == "stopTaxiJob" then
-    extensions.gameplay_taxi.stopTaxiJob()  -- Fixed
-  elseif actionName == "acceptJob" then
-    extensions.gameplay_taxi.acceptJob()  -- Fixed
-  elseif actionName == "rejectJob" then
-    extensions.gameplay_taxi.rejectJob()  -- Fixed
-  elseif actionName == "abandonJob" then
-    extensions.gameplay_taxi.abandonCurrentJob()  -- Fixed
+  elseif taxiActionMethods[actionName] then
+    callTaxiAction(actionName)
   elseif actionName == "resetUiSettings" then
     resetUiSettings()
   else
@@ -187,6 +243,7 @@ local function handleUiAction(action)
 end
 
 local function onExtensionLoaded()
+  getTaxiExtension("setAvailable")
   loadUiSettings()
   requestUiState(true)
 end
@@ -199,6 +256,8 @@ local function onUpdate()
 end
 
 local function onGameStateUpdate(state)
+  getTaxiExtension("setAvailable")
+
   if state and state.appLayout == "freeroam" and career_career.isActive() then
     if ui_apps_genericMissionData then
       ui_apps_genericMissionData.clearData()

@@ -56,6 +56,9 @@ local SHARED_RIDE_MIN_SEATS = 4
 local SHARED_RIDE_OFFER_CHANCE = 0.25
 local SHARED_RIDE_MIN_DROPOFF_DISTANCE = 250
 local SHARED_RIDE_MAX_DROPOFFS = 3
+local BUS_DISPLAY_DEFAULT_ROUTE = "[BUS]"
+local BUS_DISPLAY_DEFAULT_DIRECTION = "Not in Service"
+local BUS_DISPLAY_DEFAULT_COLOR = "#FFA200"
 
 -- Fare calculation
 local DISTANCE_MULTIPLIER = 3
@@ -401,6 +404,123 @@ end
 
 local function getPlayerVehicle()
   return be and be:getPlayerVehicle(0) or nil
+end
+
+local function serializeLuaLiteral(value)
+  local serializer = serialize or dumps
+  if type(serializer) ~= "function" then return nil end
+
+  local ok, literal = pcall(serializer, value)
+  if ok and literal then return literal end
+  return nil
+end
+
+local function queueCityBusGameplayEvent(eventName, eventData)
+  local vehicle = getPlayerVehicle()
+  if not vehicle or not vehicle.queueLuaCommand then return false end
+
+  local eventNameLiteral = serializeLuaLiteral(eventName)
+  local eventDataLiteral = serializeLuaLiteral(eventData or {})
+  if not eventNameLiteral or not eventDataLiteral then
+    log("W", logTag, "Could not serialize citybus display event: " .. tostring(eventName))
+    return false
+  end
+
+  vehicle:queueLuaCommand(
+    "local eventName = " .. eventNameLiteral .. "\n" ..
+    "local eventData = " .. eventDataLiteral .. "\n" ..
+    [[
+local mainPartName = v and v.config and v.config.mainPartName or ""
+if mainPartName == "citybus" and controller and controller.onGameplayEvent then
+  controller.onGameplayEvent(eventName, eventData)
+end
+]]
+  )
+
+  return true
+end
+
+local function isActualCityBusRouteFare(fare)
+  return fare and fare.routeMode == "multistop" and fare.routeType ~= "shared" and type(fare.stops) == "table" and #fare.stops >= 2
+end
+
+local function stopPositionToDisplayTable(pos)
+  if not pos then return {0, 0, 0} end
+  return {
+    tonumber(pos.x) or tonumber(pos[1]) or 0,
+    tonumber(pos.y) or tonumber(pos[2]) or 0,
+    tonumber(pos.z) or tonumber(pos[3]) or 0
+  }
+end
+
+local function buildCityBusDisplayTasklist(stops, startIndex)
+  local tasklist = {}
+  local firstIndex = math.max(1, math.floor(tonumber(startIndex) or 1))
+  for index = firstIndex, #(stops or {}) do
+    local stop = stops[index]
+    if stop and stop.pos then
+      local triggerName = tostring(stop.name or stop.triggerName or stop.stopName or ("stop_" .. index))
+      local stopName = tostring(stop.stopName or stop.name or triggerName)
+      table.insert(tasklist, {triggerName, stopName, stopPositionToDisplayTable(stop.pos)})
+    end
+  end
+  return tasklist
+end
+
+local function getCityBusDisplayStartIndex(fare)
+  if machineState == "dropoff" then
+    return math.min(#(fare.stops or {}), (tonumber(fare.currentStopIndex) or 1) + 1)
+  end
+
+  return math.max(1, tonumber(fare.currentStopIndex) or 1)
+end
+
+local function buildActualCityBusDisplayPayload(fare)
+  if not isActualCityBusRouteFare(fare) then return nil end
+
+  local routeID = tostring(fare.routeID or "")
+  local variance = tostring(fare.routeVariance or fare.variance or "")
+  if variance ~= "" and variance ~= "nil" then
+    local upperVariance = string.upper(variance)
+    if string.sub(string.upper(routeID), -#upperVariance) ~= upperVariance then
+      routeID = routeID .. upperVariance
+    end
+  end
+
+  return {
+    routeID = routeID,
+    direction = tostring(fare.routeDirection or fare.direction or ""),
+    routeColor = fare.routeColor,
+    tasklist = buildCityBusDisplayTasklist(fare.stops, getCityBusDisplayStartIndex(fare))
+  }
+end
+
+local function syncCityBusDisplayWithFare(fare)
+  local payload = buildActualCityBusDisplayPayload(fare)
+  if not payload then return false end
+  return queueCityBusGameplayEvent("bus_setLineInfo", payload)
+end
+
+local function resetCityBusDisplay()
+  return queueCityBusGameplayEvent("bus_setLineInfo", {
+    routeID = BUS_DISPLAY_DEFAULT_ROUTE,
+    direction = BUS_DISPLAY_DEFAULT_DIRECTION,
+    routeColor = BUS_DISPLAY_DEFAULT_COLOR,
+    tasklist = {
+      {"not_in_service", BUS_DISPLAY_DEFAULT_DIRECTION, {999999, 999999, 999999}}
+    }
+  })
+end
+
+local function notifyCityBusDepartedStop(fare, stop)
+  if not isActualCityBusRouteFare(fare) or not stop then return false end
+
+  local triggerName = stop.name or stop.triggerName
+  if not triggerName or triggerName == "" then return false end
+
+  return queueCityBusGameplayEvent("bus_onDepartedStop", {
+    triggerName = tostring(triggerName)
+  })
 end
 
 local function formatDistance(value, decimals)
@@ -2669,6 +2789,7 @@ local function completeRide()
   if recalculateCapacity then recalculateCapacity() end
 
   completedFare.resultType = "completed"
+  resetCityBusDisplay()
   beginFareResultDisplay(completedFare, "ready", false)
   setBusStopVehicleFreeze(false)
   clearReturnToVehicleTimer()
@@ -2771,11 +2892,16 @@ function M.acceptJob()
     state.currentFare.remainingPassengers = tonumber(state.currentFare.remainingPassengers) or tonumber(state.currentFare.passengers) or 0
     state.currentFare.nextStopName = state.currentFare.pickup and state.currentFare.pickup.stopName or state.currentFare.routeLabel
   end
+
+  if not syncCityBusDisplayWithFare(state.currentFare) then
+    resetCityBusDisplay()
+  end
   
   emitState()
 end
 
 function M.rejectJob()
+  resetCityBusDisplay()
   releaseReservations()
   setBusStopVehicleFreeze(false)
   clearReturnToVehicleTimer()
@@ -2800,6 +2926,7 @@ function M.abandonCurrentJob()
     abandonedFare, ratingPenalty, offenceCount = applyAbandonmentPenalty(state.currentFare)
   end
 
+  resetCityBusDisplay()
   releaseReservations()
   setBusStopVehicleFreeze(false)
   clearReturnToVehicleTimer()
@@ -2823,6 +2950,7 @@ end
 local function cancelCurrentFareForVehicleExit()
   if not state.currentFare and not state.preparedFare then return end
 
+  resetCityBusDisplay()
   releaseReservations()
   setBusStopVehicleFreeze(false)
   clearReturnToVehicleTimer()
@@ -2848,6 +2976,7 @@ function M.setAvailable()
   state.shiftAbandonCount = 0
   jobOfferTimer = 0
   jobOfferInterval = math.random(JOB_OFFER_INTERVAL_MIN, JOB_OFFER_INTERVAL_MAX)
+  resetCityBusDisplay()
   setBusStopVehicleFreeze(false)
   clearReturnToVehicleTimer()
   state.preparedFare = nil
@@ -2863,6 +2992,7 @@ function M.stopTaxiJob()
     abandonedFare, ratingPenalty, offenceCount = applyAbandonmentPenalty(state.currentFare)
   end
 
+  resetCityBusDisplay()
   releaseReservations()
   setBusStopVehicleFreeze(false)
   clearReturnToVehicleTimer()
@@ -3114,6 +3244,7 @@ local function update(dt)
     elseif isReturnToVehicleTimerActive() then
       clearReturnToVehicleTimer()
       restoreActiveFareRoute(activeVehicle)
+      syncCityBusDisplayWithFare(state.currentFare)
       showToast(BRAND_NAME, "Trip resumed.", "success")
       emitState()
     end
@@ -3148,6 +3279,7 @@ local function update(dt)
           state.rideData = {}
 
           if state.currentFare.routeMode == "multistop" then
+            notifyCityBusDepartedStop(state.currentFare, state.currentFare.pickup)
             state.currentFare.totalDistance = state.currentFare.totalRouteDistance or state.currentFare.estimatedDistance or 0
             state.currentFare.chargedDistance = state.currentFare.totalRouteDistance or state.currentFare.estimatedDistance or 0
             if not setMultiStopDestinationForIndex(state.currentFare, 1) then
@@ -3187,6 +3319,8 @@ local function update(dt)
         local stopServiceStage = state.currentFare.routeMode == "multistop" and "stop" or "dropoff"
         if updateFareStopService(state.currentFare, stopServiceStage, state.currentFare.destination, vehicle) then
           if state.currentFare.routeMode == "multistop" then
+            local servedStop = state.currentFare.destination
+            notifyCityBusDepartedStop(state.currentFare, servedStop)
             if advanceMultiStopFare(state.currentFare) then
               emitState()
             else
@@ -3281,6 +3415,7 @@ local function onVehicleSwitched()
         refreshVehiclePayProfile(vehicle:getID())
       end
       restoreActiveFareRoute(vehicle)
+      syncCityBusDisplayWithFare(state.currentFare)
       showToast(BRAND_NAME, "Trip resumed.", "success")
       emitState()
       return
@@ -3290,6 +3425,7 @@ local function onVehicleSwitched()
       recalculateCapacity()
       refreshVehiclePayProfile(vehicle:getID())
       restoreActiveFareRoute(vehicle)
+      syncCityBusDisplayWithFare(state.currentFare)
       emitState()
       return
     end
@@ -3301,6 +3437,7 @@ local function onVehicleSwitched()
     core_groundMarkers.resetAll()
   end
   
+  resetCityBusDisplay()
   releaseReservations()
   setBusStopVehicleFreeze(false)
   clearReturnToVehicleTimer()
@@ -3338,20 +3475,6 @@ local function onExtensionLoaded()
   loadPlayerRating()
 end
 
-local function onExtensionUnloaded()
-  unloadPassengerModules()
-  core_groundMarkers.resetAll()
-  releaseReservations()
-  setBusStopVehicleFreeze(false)
-  clearReturnToVehicleTimer()
-  state.currentFare = nil
-  machineState = "start"
-  state.shiftAbandonCount = 0
-  state.preparedFare = nil
-  invalidateLocationCaches()
-  teardownTaxiMarkers()
-end
-
 local function onSaveCurrentSaveSlot(currentSavePath)
   savePlayerRating(currentSavePath)
 end
@@ -3364,7 +3487,7 @@ end
 -- EXPORTS
 -- ================================
 M.onExtensionLoaded = onExtensionLoaded
-M.onExtensionUnloaded = onExtensionUnloaded
+M.onServerLeave = onServerLeave
 M.onEnterVehicleFinished = onEnterVehicleFinished
 M.onUpdate = update
 M.onVehicleSwitched = onVehicleSwitched
