@@ -415,6 +415,38 @@ local function serializeLuaLiteral(value)
   return nil
 end
 
+local function normalizeRouteColor(routeColor)
+  if type(routeColor) ~= "string" then return nil end
+
+  local hex = routeColor:match("^%s*#?([0-9a-fA-F]+)%s*$")
+  if not hex then return nil end
+
+  if #hex == 3 then
+    hex = hex:sub(1, 1) .. hex:sub(1, 1) ..
+      hex:sub(2, 2) .. hex:sub(2, 2) ..
+      hex:sub(3, 3) .. hex:sub(3, 3)
+  elseif #hex == 6 or #hex == 8 then
+    hex = hex:sub(1, 6)
+  else
+    return nil
+  end
+
+  return "#" .. string.lower(hex)
+end
+
+local function routeColorToGroundMarkerColor(routeColor)
+  local normalized = normalizeRouteColor(routeColor)
+  if not normalized then return nil end
+
+  local hex = normalized:sub(2)
+  local red = tonumber("0x" .. hex:sub(1, 2))
+  local green = tonumber("0x" .. hex:sub(3, 4))
+  local blue = tonumber("0x" .. hex:sub(5, 6))
+  if not red or not green or not blue then return nil end
+
+  return {red / 255, green / 255, blue / 255}
+end
+
 local function queueCityBusGameplayEvent(eventName, eventData)
   local vehicle = getPlayerVehicle()
   if not vehicle or not vehicle.queueLuaCommand then return false end
@@ -442,6 +474,11 @@ end
 
 local function isActualCityBusRouteFare(fare)
   return fare and fare.routeMode == "multistop" and fare.routeType ~= "shared" and type(fare.stops) == "table" and #fare.stops >= 2
+end
+
+local function getCityBusRouteColor(fare)
+  if not isActualCityBusRouteFare(fare) then return nil end
+  return normalizeRouteColor(fare.routeColor)
 end
 
 local function stopPositionToDisplayTable(pos)
@@ -490,7 +527,7 @@ local function buildActualCityBusDisplayPayload(fare)
   return {
     routeID = routeID,
     direction = tostring(fare.routeDirection or fare.direction or ""),
-    routeColor = fare.routeColor,
+    routeColor = getCityBusRouteColor(fare) or BUS_DISPLAY_DEFAULT_COLOR,
     tasklist = buildCityBusDisplayTasklist(fare.stops, getCityBusDisplayStartIndex(fare))
   }
 end
@@ -1821,7 +1858,7 @@ local function loadBusRoutes()
             routeID = tostring(route.routeID or "?"),
             variance = tostring(route.variance or "a"),
             direction = route.direction or "City Loop",
-            routeColor = route.routeColor,
+            routeColor = normalizeRouteColor(route.routeColor),
             tasklist = resolvedStops
           })
         end
@@ -2157,6 +2194,7 @@ local function buildMultiStopFare(valueMultiplier)
     routeID = routeSegment.routeID,
     routeVariance = routeSegment.variance,
     routeDirection = routeSegment.direction,
+    routeColor = routeSegment.routeColor,
     routeLabel = routeSegment.routeLabel,
     stops = routeSegment.stops,
     totalStops = stopCount,
@@ -2247,11 +2285,17 @@ local function hasActiveTaxiRoute()
   return routeDistance and routeDistance > 1
 end
 
-local function setTaxiRouteToTarget(targetPos, fallbackFromPos)
+local function setTaxiRouteToTarget(targetPos, fallbackFromPos, routeColor)
   if not targetPos then return 0 end
   if not core_groundMarkers or not core_groundMarkers.setPath then return 0 end
-  
-  core_groundMarkers.setPath(targetPos, {clearPathOnReachingTarget = true})
+
+  local pathOptions = {clearPathOnReachingTarget = true}
+  local markerColor = routeColorToGroundMarkerColor(routeColor)
+  if markerColor then
+    pathOptions.color = markerColor
+  end
+
+  core_groundMarkers.setPath(targetPos, pathOptions)
   local routeDistance = M.getLiveRoutePlannerDistance() or (core_groundMarkers.getPathLength and core_groundMarkers.getPathLength() or 0)
   if routeDistance and routeDistance > 0 then return routeDistance end
   
@@ -2276,7 +2320,7 @@ local function ensureTaxiRouteToTarget(target, fallbackFromPos)
   if now - lastRouteRestoreTime < ROUTE_RESTORE_COOLDOWN then return nil end
   lastRouteRestoreTime = now
 
-  return setTaxiRouteToTarget(targetPos, fallbackFromPos)
+  return setTaxiRouteToTarget(targetPos, fallbackFromPos, getCityBusRouteColor(state.currentFare))
 end
 
 local function restoreActiveFareRoute(vehicle)
@@ -2620,7 +2664,7 @@ local function setMultiStopDestinationForIndex(fare, reachedStopIndex)
 
   local legDistance = 0
   if nextStop and nextStop.pos then
-    legDistance = setTaxiRouteToTarget(nextStop.pos, currentStop and currentStop.pos or nil)
+    legDistance = setTaxiRouteToTarget(nextStop.pos, currentStop and currentStop.pos or nil, getCityBusRouteColor(fare))
   end
 
   fare.currentLegDistance = legDistance or 0
@@ -2881,7 +2925,7 @@ function M.acceptJob()
   
   local vehicle = getPlayerVehicle()
   local vehiclePos = vehicle and vehicle:getPosition() or nil
-  local pickupDistance = setTaxiRouteToTarget(state.currentFare.pickup.pos, vehiclePos)
+  local pickupDistance = setTaxiRouteToTarget(state.currentFare.pickup.pos, vehiclePos, getCityBusRouteColor(state.currentFare))
   state.currentFare.totalDistance = pickupDistance or 0
   state.currentFare.remainingDistance = pickupDistance or 0
   
@@ -3287,7 +3331,7 @@ local function update(dt)
               return
             end
           else
-            local dropoffDistance = setTaxiRouteToTarget(state.currentFare.destination.pos, state.currentFare.pickup and state.currentFare.pickup.pos or nil)
+            local dropoffDistance = setTaxiRouteToTarget(state.currentFare.destination.pos, state.currentFare.pickup and state.currentFare.pickup.pos or nil, getCityBusRouteColor(state.currentFare))
             state.currentFare.totalDistance = (state.currentFare.totalDistance or 0) + (dropoffDistance or 0)
             state.currentFare.remainingDistance = dropoffDistance or 0
             state.currentFare.chargedDistance = dropoffDistance or state.currentFare.estimatedDistance or 0
