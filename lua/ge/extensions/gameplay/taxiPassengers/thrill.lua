@@ -165,12 +165,12 @@ end
 -- LIFECYCLE
 -- ================================
 local function onExtensionLoaded()
-  if not gameplay_taxi then
-    log('W', logTag, 'gameplay_taxi not loaded - passenger type not registered')
+  if not gameplay_buberTaxi then
+    log('W', logTag, 'gameplay_buberTaxi not loaded - passenger type not registered')
     return
   end
 
-  gameplay_taxi.registerPassengerType("THRILL", {
+  gameplay_buberTaxi.registerPassengerType("THRILL", {
     name = "Thrill Seeker",
     description = "Adrenaline junkies who love high G-forces and speed",
     baseMultiplier = 0.8,

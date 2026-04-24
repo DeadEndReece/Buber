@@ -1,4 +1,4 @@
-﻿var app = angular.module('beamng.apps')
+var app = angular.module('beamng.apps')
 
 // =============================================================================
 // Constants
@@ -250,7 +250,7 @@ app.controller('BuberController', ['$scope', '$sce', '$timeout', '$interval', '$
 
   requestTaxiState = function () {
     sendLua(
-      'local ext = extensions.buber_ui or extensions.gameplay_taxi or gameplay_taxi; ' +
+      'local ext = extensions.buber_ui or extensions.gameplay_buberTaxi or gameplay_buberTaxi; ' +
       'if ext and ext.requestUiState then ext.requestUiState(true) end'
     )
   }

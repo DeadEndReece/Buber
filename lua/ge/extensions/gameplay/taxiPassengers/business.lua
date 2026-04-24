@@ -161,7 +161,7 @@ local function getPaymentLabel(fare, speedFactor, passengerType)
 end
 
 local function onExtensionLoaded()
-    gameplay_taxi.registerPassengerType("BUSINESS", {
+    gameplay_buberTaxi.registerPassengerType("BUSINESS", {
         name = "Business",
         description = "Time-conscious passengers with strict schedules",
         baseMultiplier = PASSENGER_CONFIG.baseMultiplier,

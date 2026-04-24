@@ -1,5 +1,9 @@
 local M = {}
-M.dependencies = { "gameplay_taxi" }
+-- Dependencies are intentionally minimal. gameplay_buberTaxi is loaded by
+-- modScript.lua and looked up via getTaxiExtension() with nil-safe checks.
+-- Hard-declaring it here would force extension lifecycle management that
+-- can conflict with BeamMP's beamling system.
+M.dependencies = {}
 
 local logTag = "buberapp"
 
@@ -163,37 +167,13 @@ local taxiActionMethods = {
 }
 
 local function getTaxiExtension(methodName)
-  local taxi = extensions and extensions.gameplay_taxi or nil
+  -- Simple lookup only — never trigger extension reloads from the UI.
+  -- modScript.lua handles loading; reloading here causes cascade reloads
+  -- that break the base game's beamling mesh system on server rejoin.
+  local taxi = extensions and extensions.gameplay_buberTaxi or nil
   if taxi and type(taxi[methodName]) == "function" then return taxi end
 
-  taxi = gameplay_taxi
-  if taxi and type(taxi[methodName]) == "function" then return taxi end
-
-  if extensions then
-    if extensions.unload and extensions.gameplay_taxi then
-      pcall(extensions.unload, "gameplay_taxi")
-    end
-
-    if setExtensionUnloadMode then
-      pcall(setExtensionUnloadMode, "gameplay_taxi", "manual")
-    end
-
-    local ok, err = false, nil
-    if extensions.loadAtRoot then
-      ok, err = pcall(extensions.loadAtRoot, "lua/ge/extensions/gameplay/taxi", "gameplay")
-    elseif extensions.load then
-      ok, err = pcall(extensions.load, "gameplay_taxi")
-    end
-
-    if not ok then
-      log("E", logTag, "Unable to load BUBER gameplay_taxi: " .. tostring(err or "no extension loader available"))
-    end
-  end
-
-  taxi = extensions and extensions.gameplay_taxi or nil
-  if taxi and type(taxi[methodName]) == "function" then return taxi end
-
-  taxi = gameplay_taxi
+  taxi = gameplay_buberTaxi
   if taxi and type(taxi[methodName]) == "function" then return taxi end
 
   return nil
@@ -256,9 +236,13 @@ local function onUpdate()
 end
 
 local function onGameStateUpdate(state)
-  getTaxiExtension("setAvailable")
+  -- In BeamMP multiplayer, do NOT override the game state.
+  -- Forcing "career" mode in multiplayer triggers the career initialization
+  -- pipeline which resets beamling meshes to "without_mesh" (invisible players).
+  local isMultiplayer = MPCoreNetwork ~= nil or MPGameNetwork ~= nil
+  local isCareerActive = career_career and type(career_career.isActive) == "function" and career_career.isActive()
 
-  if state and state.appLayout == "freeroam" and career_career.isActive() then
+  if not isMultiplayer and state and state.appLayout == "freeroam" and isCareerActive then
     if ui_apps_genericMissionData then
       ui_apps_genericMissionData.clearData()
     end
@@ -266,6 +250,7 @@ local function onGameStateUpdate(state)
     return
   end
 
+  getTaxiExtension("setAvailable")
   onUpdate()
   requestUiState(true)
 end

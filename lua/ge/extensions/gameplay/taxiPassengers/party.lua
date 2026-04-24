@@ -46,8 +46,8 @@ local function calculateTipBreakdown(fare, elapsedTime, speedFactor, passengerTy
     tipBreakdown["Safety Bonus"] = 0.25 * baseFare
   end
 
-  if gameplay_taxi.rideData and gameplay_taxi.rideData.currentSensorData then
-    local totalG = getGForceTotal(gameplay_taxi.rideData.currentSensorData)
+  if gameplay_buberTaxi.rideData and gameplay_buberTaxi.rideData.currentSensorData then
+    local totalG = getGForceTotal(gameplay_buberTaxi.rideData.currentSensorData)
     if totalG < G_THRESHOLDS.SMOOTH_RIDE then
       tipBreakdown["Smooth Ride"] = 0.18 * baseFare
     end
@@ -128,13 +128,13 @@ end
 -- LIFECYCLE
 -- ================================
 local function onExtensionLoaded()
-  -- gameplay_taxi is dynamically loaded - must check before use
-  if not gameplay_taxi then
-    log('W', logTag, 'gameplay_taxi not loaded - passenger type not registered')
+  -- gameplay_buberTaxi is dynamically loaded - must check before use
+  if not gameplay_buberTaxi then
+    log('W', logTag, 'gameplay_buberTaxi not loaded - passenger type not registered')
     return
   end
 
-  gameplay_taxi.registerPassengerType("PARTY", {
+  gameplay_buberTaxi.registerPassengerType("PARTY", {
     name = "Party Group",
     description = "Large groups heading to parties who value safety and comfort over speed",
     baseMultiplier = 0.55,

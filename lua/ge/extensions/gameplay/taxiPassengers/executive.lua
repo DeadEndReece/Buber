@@ -94,12 +94,12 @@ end
 -- ================================
 
 local function onExtensionLoaded()
-  if not gameplay_taxi then
-    log("W", logTag, "gameplay_taxi not loaded, skipping registration")
+  if not gameplay_buberTaxi then
+    log("W", logTag, "gameplay_buberTaxi not loaded, skipping registration")
     return
   end
 
-  gameplay_taxi.registerPassengerType("EXECUTIVE", {
+  gameplay_buberTaxi.registerPassengerType("EXECUTIVE", {
     -- Config
     name = EXECUTIVE_CONFIG.name,
     description = EXECUTIVE_CONFIG.description,

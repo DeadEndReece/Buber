@@ -13,7 +13,7 @@
     "height": "420px"
   },
   "description": "Dispatch and fare management panel for BUBER.",
-  "author": "DeadEndReece + Codex",
-  "version": "0.4.0",
+  "author": "DeadEndReece",
+  "version": "0.5.0",
   "directive": "buberapp"
 }

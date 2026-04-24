@@ -1,14 +1,15 @@
 --[[
-  BUBER Taxi Service - BeamNG Career Mode Taxi Extension
-  Provides taxi fare generation, passenger types, and payout calculations
+  BUBER Taxi Service — BeamNG Career Mode Taxi Extension
+  All tunable values live in gameplay/taxiConfig.lua
 ]]
 
 local M = {}
 M.dependencies = {
-  'gameplay_sites_sitesManager',
-  'freeroam_facilities',
-  'gameplay_walk',
-  'gameplay_parking'
+  'gameplay_taxiConfig',
+  -- All other game extensions (gameplay_walk, gameplay_sites_sitesManager, etc.)
+  -- are accessed with nil guards. They are NOT listed as hard dependencies because
+  -- doing so forces the extension system to manage their lifecycle, which can
+  -- conflict with BeamMP's beamling avatar mesh system (causing invisible players).
 }
 
 -- ================================
@@ -17,117 +18,74 @@ M.dependencies = {
 local logTag = 'buber'
 
 -- ================================
--- CONSTANTS
+-- CONFIG (loaded from taxiConfig.lua)
 -- ================================
-local BRAND_NAME = "BUBER"
-local RATING_SAVE_DIR = "buber"
-local RATING_SAVE_FILE = "taxiRating.json"
+local config = gameplay_taxiConfig
+
+-- Brand
+local BRAND_NAME                    = config.brand.name
+local RATING_SAVE_DIR               = config.brand.ratingSaveDir
+local RATING_SAVE_FILE              = config.brand.ratingSaveFile
 
 -- Timing
-local JOB_OFFER_INTERVAL_MIN = 5
-local JOB_OFFER_INTERVAL_MAX = 45
-local JOB_OFFER_PREPARE_LEAD_TIME = 3
-local JOB_ACCEPT_TIMEOUT_SECONDS = 30
-local COMPLETED_FARE_DISPLAY_SECONDS = 6
-local UPDATE_INTERVAL = 1
-local ROUTE_RESTORE_COOLDOWN = 2.0
-local RETURN_TO_VEHICLE_GRACE_SECONDS = 20
+local JOB_OFFER_INTERVAL_MIN        = config.timing.jobOfferIntervalMin
+local JOB_OFFER_INTERVAL_MAX        = config.timing.jobOfferIntervalMax
+local JOB_OFFER_PREPARE_LEAD_TIME   = config.timing.jobOfferPrepareLeadTime
+local JOB_ACCEPT_TIMEOUT_SECONDS    = config.timing.jobAcceptTimeout
+local COMPLETED_FARE_DISPLAY_SECONDS = config.timing.completedFareDisplay
+local UPDATE_INTERVAL                = config.timing.updateInterval
+local ROUTE_RESTORE_COOLDOWN         = config.timing.routeRestoreCooldown
+local RETURN_TO_VEHICLE_GRACE_SECONDS = config.timing.returnToVehicleGrace
 
 -- Taxi zones
-local TAXI_STOP_RADIUS = 5
-local TAXI_STOP_HEIGHT = 2.5
-local TAXI_ZONE_DRAW_RADIUS = 1
-local PICKUP_SEARCH_RADIUS = 500
-local MIN_PICKUP_DISTANCE = 60
-local PICKUP_CACHE_REFRESH_DISTANCE = 125
-local MAX_TAXI_PICKUP_SAMPLES = 8
-local MAX_TAXI_DROPOFF_SAMPLES = 24
+local TAXI_STOP_RADIUS               = config.zones.stopRadius
+local TAXI_STOP_HEIGHT               = config.zones.stopHeight
+local TAXI_ZONE_DRAW_RADIUS          = config.zones.drawRadius
+local PICKUP_SEARCH_RADIUS           = config.zones.pickupSearchRadius
+local MIN_PICKUP_DISTANCE            = config.zones.minPickupDistance
+local PICKUP_CACHE_REFRESH_DISTANCE  = config.zones.pickupCacheRefreshDist
+local MAX_TAXI_PICKUP_SAMPLES        = config.zones.maxPickupSamples
+local MAX_TAXI_DROPOFF_SAMPLES       = config.zones.maxDropoffSamples
 
 -- Passenger service
-local PASSENGER_STOP_SERVICE_SECONDS = 3
-local PASSENGER_STOP_SPEED_THRESHOLD = 0.75
-local BUS_PASSENGER_SERVICE_RATE = 2
+local PASSENGER_STOP_SERVICE_SECONDS = config.service.stopServiceSeconds
+local PASSENGER_STOP_SPEED_THRESHOLD = config.service.stopSpeedThreshold
+local BUS_PASSENGER_SERVICE_RATE     = config.service.busPassengerServiceRate
 
 -- Multi-stop
-local MULTI_STOP_VEHICLE_SEAT_THRESHOLD = 18
-local MULTI_STOP_EMPTY_STOP_CHANCE = 0.35
-local MULTI_STOP_REQUIRED_RATING = 2.0
-local SHARED_RIDE_MIN_SEATS = 4
-local SHARED_RIDE_OFFER_CHANCE = 0.25
-local SHARED_RIDE_MIN_DROPOFF_DISTANCE = 250
-local SHARED_RIDE_MAX_DROPOFFS = 3
-local BUS_DISPLAY_DEFAULT_ROUTE = "[BUS]"
-local BUS_DISPLAY_DEFAULT_DIRECTION = "Not in Service"
-local BUS_DISPLAY_DEFAULT_COLOR = "#FFA200"
+local MULTI_STOP_VEHICLE_SEAT_THRESHOLD = config.multiStop.vehicleSeatThreshold
+local MULTI_STOP_EMPTY_STOP_CHANCE      = config.multiStop.emptyStopChance
+local MULTI_STOP_REQUIRED_RATING        = config.multiStop.requiredRating
+
+-- Shared rides
+local SHARED_RIDE_MIN_SEATS           = config.sharedRide.minSeats
+local SHARED_RIDE_OFFER_CHANCE        = config.sharedRide.offerChance
+local SHARED_RIDE_MIN_DROPOFF_DISTANCE = config.sharedRide.minDropoffDistance
+local SHARED_RIDE_MAX_DROPOFFS        = config.sharedRide.maxDropoffs
+
+-- Bus display
+local BUS_DISPLAY_DEFAULT_ROUTE       = config.busDisplay.defaultRoute
+local BUS_DISPLAY_DEFAULT_DIRECTION   = config.busDisplay.defaultDirection
+local BUS_DISPLAY_DEFAULT_COLOR       = config.busDisplay.defaultColor
 
 -- Fare calculation
-local DISTANCE_MULTIPLIER = 3
-local SUGGESTED_SPEED = 18
+local DISTANCE_MULTIPLIER            = config.fare.distanceMultiplier
+local SUGGESTED_SPEED                 = config.fare.suggestedSpeed
 
 -- Driver rating
-local RATING_SUM_PER_LEVEL = 25
-local MAX_DRIVER_RATING = 5
+local RATING_SUM_PER_LEVEL           = config.rating.sumPerLevel
+local MAX_DRIVER_RATING              = config.rating.maxRating
 
-local VEHICLE_CLASS_PAY_TIERS = {
-  D = {description = "Economy/Utility", minPI = 0, maxPI = 20, minMultiplier = 0.70, maxMultiplier = 0.90},
-  C = {description = "Standard", minPI = 21, maxPI = 40, minMultiplier = 0.95, maxMultiplier = 1.10},
-  B = {description = "Sports", minPI = 41, maxPI = 65, minMultiplier = 1.15, maxMultiplier = 1.30},
-  A = {description = "High Performance", minPI = 66, maxPI = 85, minMultiplier = 1.35, maxMultiplier = 1.55},
-  S = {description = "Super Sports", minPI = 86, maxPI = 100, minMultiplier = 1.65, maxMultiplier = 1.90},
-  X = {description = "Modified", minPI = 101, maxPI = 120, minMultiplier = 2.00, maxMultiplier = 2.20}
-}
+-- Vehicle class pay tiers
+local VEHICLE_CLASS_PAY_TIERS        = config.vehicle.classTiers
 
-local DRIVER_SEAT_CAP_CURVE = {
-  {rating = 0.0, value = 4},
-  {rating = 0.2, value = 4},
-  {rating = 0.4, value = 5},
-  {rating = 0.6, value = 5},
-  {rating = 0.8, value = 6},
-  {rating = 1.0, value = 8},
-  {rating = 1.5, value = 12},
-  {rating = 2.0, value = 18},
-  {rating = 2.5, value = 25},
-  {rating = 3.0, value = 35},
-  {rating = 3.5, value = 50},
-  {rating = 4.0, value = 65},
-  {rating = 4.5, value = 80},
-  {rating = 5.0, value = math.huge}
-}
+-- Rating-driven curves and milestones
+local DRIVER_SEAT_CAP_CURVE          = config.rating.seatCapCurve
+local PROGRESSION_MILESTONES         = config.rating.milestones
 
-local PROGRESSION_MILESTONES = {
-  {rating = 0.0, label = "Start fares", description = "Direct BUBER fares are available."},
-  {rating = 0.2, label = "First cap bump", description = "Early payout ceiling increases."},
-  {rating = 0.4, label = "More seats", description = "Small groups become easier to serve."},
-  {rating = 0.6, label = "Steady work", description = "Direct fare cap keeps climbing."},
-  {rating = 0.8, label = "Larger calls", description = "More passenger capacity opens up."},
-  {rating = 1.0, label = "Trusted driver", description = "Better direct fares and larger groups."},
-  {rating = 1.5, label = "Growing demand", description = "Bigger jobs start appearing more often."},
-  {rating = 2.0, label = "Route driver", description = "Multi-stop and bus routes unlock."},
-  {rating = 2.5, label = "Route regular", description = "Bus payouts and seat capacity increase."},
-  {rating = 3.0, label = "High capacity", description = "Large multi-stop work opens up."},
-  {rating = 3.5, label = "City favourite", description = "Higher route limits and more seats."},
-  {rating = 4.0, label = "Elite service", description = "Strong direct and route payouts."},
-  {rating = 4.5, label = "Premium capacity", description = "Most vehicle seats can be used."},
-  {rating = 5.0, label = "BUBER legend", description = "Full vehicle capacity unlocked."}
-}
-
-local TAXI_ZONE_COLORS = {
-  pickup = {
-    active = {1, 0.82, 0.2, 0.85},
-    inactive = {1, 0.82, 0.2, 0.35}
-  },
-  dropoff = {
-    active = {0.22, 0.86, 0.45, 0.85},
-    inactive = {0.22, 0.86, 0.45, 0.35}
-  }
-}
-
-local TAXI_DEBUG_SPOT_COLORS = {
-  all = {0.18, 0.9, 0.35, 0.45},
-  pickup = {1, 0.82, 0.2, 0.75},
-  bus = {0.2, 0.55, 1, 0.75},
-  reserved = {1, 0.1, 0.1, 0.9}
-}
+-- Visual
+local TAXI_ZONE_COLORS               = config.visual.zoneColors
+local TAXI_DEBUG_SPOT_COLORS          = config.visual.debugSpotColors
 
 -- ================================
 -- STATE
@@ -193,27 +151,24 @@ local partsTreePending = false
 local lastCapacityDebug = {}
 
 -- Passenger module loading
-local PASSENGER_MODULES_PATH = "/lua/ge/extensions/gameplay/taxiPassengers/"
+local PASSENGER_MODULES_PATH = config.passengerModules.path
 
 -- ================================
 -- PASSENGER TYPES
 -- ================================
+local defaultPax = config.defaultPassenger
 local passengerTypes = {
   STANDARD = {
-    name = "Standard",
-    description = "Regular passengers who value speed and efficiency",
-    baseMultiplier = 1.0,
-    speedWeight = 1.0,
-    distanceWeight = 1.0,
-    selectionWeight = 5,
-    seatRange = {nil, 10},
-    valueRange = {nil, nil},
-    fareWeights = {
-      {min = 0.5, max = 0.8, weight = 3},
-      {min = 0.8, max = 1.2, weight = 5},
-      {min = 1.2, max = 1.5, weight = 2}
-    },
-    speedTolerance = 0.5,
+    name = defaultPax.name,
+    description = defaultPax.description,
+    baseMultiplier = defaultPax.baseMultiplier,
+    speedWeight = defaultPax.speedWeight,
+    distanceWeight = defaultPax.distanceWeight,
+    selectionWeight = defaultPax.selectionWeight,
+    seatRange = defaultPax.seatRange,
+    valueRange = defaultPax.valueRange,
+    fareWeights = defaultPax.fareWeights,
+    speedTolerance = defaultPax.speedTolerance,
     calculateTipBreakdown = function(fare, elapsedTime, speedFactor, passengerType)
       local baseFare = tonumber(fare.baseFare) or 0
       if speedFactor > 0 then
@@ -238,8 +193,9 @@ local passengerTypes = {
     onUpdate = function(fare, rideData, passengerType)
       local s = rideData.currentSensorData
       if s then
+        local roughThreshold = defaultPax.roughGThreshold or 0.6
         local peak = math.max(math.abs(s.gx2 or 0), math.abs(s.gy2 or 0), math.abs(s.gz2 or 0))
-        if peak > 0.6 then
+        if peak > roughThreshold then
           rideData.roughEvents = (rideData.roughEvents or 0) + 1
         end
       end
@@ -250,60 +206,21 @@ local passengerTypes = {
 -- ================================
 -- PAYOUT LIMITS
 -- ================================
+-- copyDeep is needed here to snapshot the config tables so runtime
+-- changes (e.g. setFarePayoutCap) don't mutate the shared config.
+local function copyDeep(value)
+  if type(value) ~= "table" then return value end
+  local out = {}
+  for k, v in pairs(value) do
+    out[k] = copyDeep(v)
+  end
+  return out
+end
+
 local payoutLimits = {
   profiles = {
-    direct = {
-      softCap = 6500,
-      softCapOverflowRate = 0.30,
-      multiplierStackCap = 4.5,
-      tipSoftCapOverflowRate = 0.25,
-      tipSoftCaps = {[0] = 80, [1] = 150, [2] = 275, [3] = 450, [4] = 700, [5] = 1000},
-      tipBasePercentCaps = {[0] = 0.20, [1] = 0.25, [2] = 0.30, [3] = 0.35, [4] = 0.45, [5] = 0.50},
-      ratingHardCapCurve = {
-        {rating = 0.0, value = 300},
-        {rating = 0.2, value = 500},
-        {rating = 0.4, value = 700},
-        {rating = 0.6, value = 900},
-        {rating = 0.8, value = 1100},
-        {rating = 1.0, value = 1300},
-        {rating = 1.5, value = 1800},
-        {rating = 2.0, value = 2500},
-        {rating = 2.5, value = 3300},
-        {rating = 3.0, value = 4200},
-        {rating = 3.5, value = 5200},
-        {rating = 4.0, value = 6500},
-        {rating = 4.5, value = 7600},
-        {rating = 5.0, value = 8500}
-      }
-    },
-    multistop = {
-      softCap = 12000,
-      softCapOverflowRate = 0.25,
-      multiplierStackCap = 3.0,
-      fullPassengerCount = 16,
-      extraPassengerRate = 0.35,
-      fullDistanceMeters = 12000,
-      extraDistanceRate = 0.45,
-      tipSoftCapOverflowRate = 0.18,
-      tipSoftCaps = {[0] = 120, [1] = 225, [2] = 400, [3] = 650, [4] = 950, [5] = 1300},
-      tipBasePercentCaps = {[0] = 0.12, [1] = 0.15, [2] = 0.18, [3] = 0.22, [4] = 0.27, [5] = 0.32},
-      ratingHardCapCurve = {
-        {rating = 0.0, value = 500},
-        {rating = 0.2, value = 800},
-        {rating = 0.4, value = 1100},
-        {rating = 0.6, value = 1400},
-        {rating = 0.8, value = 1700},
-        {rating = 1.0, value = 2200},
-        {rating = 1.5, value = 3200},
-        {rating = 2.0, value = 4500},
-        {rating = 2.5, value = 6000},
-        {rating = 3.0, value = 8000},
-        {rating = 3.5, value = 10000},
-        {rating = 4.0, value = 12500},
-        {rating = 4.5, value = 14500},
-        {rating = 5.0, value = 16500}
-      }
-    }
+    direct = copyDeep(config.payout.direct),
+    multistop = copyDeep(config.payout.multistop),
   }
 }
 
@@ -356,14 +273,8 @@ local function getRatingCurveValue(curve, rating, fallback)
   return lastValue ~= nil and lastValue or fallback
 end
 
-local function copyDeep(value)
-  if type(value) ~= "table" then return value end
-  local out = {}
-  for k, v in pairs(value) do
-    out[k] = copyDeep(v)
-  end
-  return out
-end
+
+
 
 local function getPassengerModuleExtensionNames()
   local extensionNames = {}
@@ -394,12 +305,16 @@ local function loadPassengerModules()
     return
   end
 
+  -- Load each passenger module individually instead of using
+  -- loadManualUnloadExtensions() which reloads ALL manual extensions
+  -- engine-wide and can break the base game's beamling mesh state.
   for _, extensionName in ipairs(extensionNames) do
-    extensions.unload(extensionName)
+    if extensions[extensionName] then
+      extensions.unload(extensionName)
+    end
     setExtensionUnloadMode(extensionName, "manual")
+    extensions.load(extensionName)
   end
-
-  loadManualUnloadExtensions()
 end
 
 local function getPlayerVehicle()
@@ -863,6 +778,8 @@ local function findParkingSpots()
     return parkingSpots
   end
 
+  if not gameplay_sites_sitesManager then return nil end
+
   local sitePath = gameplay_sites_sitesManager.getCurrentLevelSitesFileByName('city')
   if sitePath then
     local siteData = gameplay_sites_sitesManager.loadSites(sitePath, true, true)
@@ -1038,29 +955,8 @@ local function normalizePartName(partName)
   return tostring(partName or ""):lower()
 end
 
-local SEAT_PACK_CAPACITY_RULES = {
-  {pattern = "citybus_seats", total = 44},
-  {pattern = "schoolbus_seats_r_c", total = 10},
-  {pattern = "schoolbus_seats_l_c", total = 10},
-  {pattern = "limo_seat", total = 8}
-}
-
-local CAPSULE_SEAT_PACK_CAPACITIES = {
-  {pattern = "lhd_artic_seats_upper", total = 77},
-  {pattern = "rhd_artic_seats_upper", total = 77},
-  {pattern = "lhd_artic_seats", total = 30},
-  {pattern = "rhd_artic_seats", total = 30},
-  {pattern = "lhd_seats_upper", total = 53},
-  {pattern = "lh_seats_upper", total = 53},
-  {pattern = "lhd_seats", total = 17},
-  {pattern = "lh_seats", total = 17},
-  {pattern = "sd12m", total = 25},
-  {pattern = "sd18m", total = 41},
-  {pattern = "sd105", total = 21},
-  {pattern = "sd_seats", total = 33},
-  {pattern = "dd105", total = 29},
-  {pattern = "sd195", total = 43}
-}
+local SEAT_PACK_CAPACITY_RULES = config.vehicle.seatPackRules
+local CAPSULE_SEAT_PACK_CAPACITIES = config.vehicle.capsuleSeatPacks
 
 local function getSeatPackCapacity(partName)
   partName = normalizePartName(partName)
@@ -1127,7 +1023,7 @@ local function retrievePartsTree()
   vehicle:queueLuaCommand([[
     local partsTree = v.config.partsTree
     local serializedPartsTree = serialize(partsTree)
-    obj:queueGameEngineLua("if extensions and extensions.gameplay_taxi and extensions.gameplay_taxi.onPartsTreeReceived then extensions.gameplay_taxi.onPartsTreeReceived(" .. serializedPartsTree .. ") elseif gameplay_taxi and gameplay_taxi.onPartsTreeReceived then gameplay_taxi.onPartsTreeReceived(" .. serializedPartsTree .. ") end")
+    obj:queueGameEngineLua("if extensions and extensions.gameplay_buberTaxi and extensions.gameplay_buberTaxi.onPartsTreeReceived then extensions.gameplay_buberTaxi.onPartsTreeReceived(" .. serializedPartsTree .. ") elseif gameplay_buberTaxi and gameplay_buberTaxi.onPartsTreeReceived then gameplay_buberTaxi.onPartsTreeReceived(" .. serializedPartsTree .. ") end")
   ]])
 end
 
@@ -2038,7 +1934,7 @@ local function buildDirectFare(valueMultiplier)
   for index = 1, pickupAttempts do
     local candidatePickup = shuffledPickups[index]
     if candidatePickup.pos then
-      pickupSpot, dropoffSpot = reserveTaxiSpots({candidatePickup}, allTaxiSpots, 600, MAX_TAXI_DROPOFF_SAMPLES)
+      pickupSpot, dropoffSpot = reserveTaxiSpots({candidatePickup}, allTaxiSpots, config.fare.minDropoffDistance, MAX_TAXI_DROPOFF_SAMPLES)
       if pickupSpot and dropoffSpot then break end
     end
   end
@@ -2366,7 +2262,7 @@ local function updateSensorData()
   vehicle:queueLuaCommand([[
     local sensors = require('sensors')
     if sensors then
-      obj:queueGameEngineLua('gameplay_taxi.onSensorData('..
+      obj:queueGameEngineLua('gameplay_buberTaxi.onSensorData('..
         (sensors.gx or 0)..','..(sensors.gy or 0)..','..(sensors.gz or 0)..','..
         (sensors.gx2 or 0)..','..(sensors.gy2 or 0)..','..(sensors.gz2 or 0)..')')
     end
@@ -2424,7 +2320,7 @@ local function requestBusStopVehicleState(fare, vehicle)
     local isCityBus = mainPartName == 'citybus'
     local busController = isCityBus and controller.getControllerSafe('bus') or nil
     
-    obj:queueGameEngineLua('gameplay_taxi.onBusStopVehicleState(' .. serialize({
+    obj:queueGameEngineLua('gameplay_buberTaxi.onBusStopVehicleState(' .. serialize({
       capable = isCityBus or frontDoorState ~= nil or rearDoorState ~= nil or genericDoorState ~= nil or (electrics and electrics.values and electrics.values.dooropen ~= nil),
       doorsOpen = (busController and busController.doorsOpen == true) or trackedDoorState > 0.1
     }) .. ')')
@@ -2727,7 +2623,7 @@ local function beginFareResultDisplay(fareData, nextState, clearResultOnReturn)
 end
 
 local function calculateAbandonmentPenalty()
-  return math.min(1.0, 0.10 + ((state.shiftAbandonCount - 1) * 0.15))
+  return math.min(config.rating.abandonMaxPenalty, config.rating.abandonBasePenalty + ((state.shiftAbandonCount - 1) * config.rating.abandonScalePenalty))
 end
 
 local function applyAbandonmentPenalty(fare)
@@ -3512,11 +3408,24 @@ local function onVehicleSwitched()
 end
 
 local function onExtensionLoaded()
+  -- Refresh config reference in case it was reloaded
+  config = gameplay_taxiConfig or config
   log('I', logTag, BRAND_NAME .. " module loaded")
   loadPassengerModules()
   invalidateLocationCaches()
   findParkingSpots()
   loadPlayerRating()
+end
+
+local function onExtensionUnloaded()
+  -- Clean shutdown: unload passenger modules so they don't linger
+  -- and interfere with the base game's extension system on rejoin.
+  log('I', logTag, BRAND_NAME .. " module unloading")
+  unloadPassengerModules()
+  invalidateLocationCaches()
+  setBusStopVehicleFreeze(false)
+  clearReturnToVehicleTimer()
+  core_groundMarkers.resetAll()
 end
 
 local function onSaveCurrentSaveSlot(currentSavePath)
@@ -3531,7 +3440,7 @@ end
 -- EXPORTS
 -- ================================
 M.onExtensionLoaded = onExtensionLoaded
-M.onServerLeave = onServerLeave
+M.onExtensionUnloaded = onExtensionUnloaded
 M.onEnterVehicleFinished = onEnterVehicleFinished
 M.onUpdate = update
 M.onVehicleSwitched = onVehicleSwitched
@@ -3565,5 +3474,8 @@ M.debugShowAllTaxiSpots = M.debugShowAllTaxiSpots
 M.debugListTaxiSpots = M.debugListTaxiSpots
 
 M.saveCareerAfterDropoff = M.saveCareerAfterDropoff
+
+-- Config access
+M.getConfig = function() return config end
 
 return M
