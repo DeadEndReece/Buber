@@ -2352,16 +2352,7 @@ function setBusStopVehicleFreeze(shouldFreeze)
   end
 
   if core_vehicleBridge and core_vehicleBridge.executeAction then
-    core_vehicleBridge.executeAction(veh, 'setFreeze', false)
-  end
-
-  if veh.queueLuaCommand then
-    local inputValue = shouldFreezeState and 1 or 0
-    veh:queueLuaCommand(string.format([[
-      input.event("throttle", 0, 2)
-      input.event("brake", %d, 2)
-      input.event("parkingbrake", %d, 2)
-    ]], inputValue, inputValue))
+    core_vehicleBridge.executeAction(veh, 'setFreeze', shouldFreezeState)
   end
 
   busStopVehicleFrozen = shouldFreezeState
